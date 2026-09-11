@@ -31,6 +31,12 @@ importers:
       "@prisma/client":
         specifier: 7.10.0
         version: 7.10.0(prisma@7.10.0(@types/node@24.10.1)(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3))(typescript@5.9.3)
+      express-rate-limit:
+        specifier: 8.7.0
+        version: 8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
+      helmet:
+        specifier: 8.3.0
+        version: 8.3.0
       next:
         specifier: 16.3.5
         version: 16.3.5(@babel/core@7.29.7(supports-color@8.1.1))(@opentelemetry/api@1.9.0)(@playwright/test@1.57.0)(@types/node@24.10.1)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -53,6 +59,9 @@ importers:
       "@eslint/js":
         specifier: 9.39.1
         version: 9.39.1
+      "@nestjs/testing":
+        specifier: 12.0.1
+        version: 12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.0.1)(@nestjs/platform-express@12.0.1)
       "@playwright/test":
         specifier: 1.57.0
         version: 1.57.0
@@ -71,6 +80,9 @@ importers:
       "@types/react-dom":
         specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.7)
+      "@types/supertest":
+        specifier: 7.2.1
+        version: 7.2.1
       eslint:
         specifier: 9.39.1
         version: 9.39.1(jiti@2.7.0)(supports-color@8.1.1)
@@ -107,12 +119,6 @@ importers:
       "@nexora/schemas":
         specifier: workspace:*
         version: link:../../packages/schemas
-
-  apps/docs:
-    devDependencies:
-      storybook:
-        specifier: 10.1.5
-        version: 10.1.5(@testing-library/dom@10.4.1)(prettier@3.7.4)(react@19.2.1)
 
   apps/web:
     dependencies:
@@ -2127,6 +2133,22 @@ packages:
       typeorm:
         optional: true
 
+  "@nestjs/testing@12.0.1":
+    resolution:
+      {
+        integrity: sha512-prf3fsUaoKS6t04XcQt5aSTp68Po1GxUcbEBPv+3iqAef07hKQEO15r0jmmwA+rWZfONYT1UcV3YIylR++/tCg==,
+      }
+    peerDependencies:
+      "@nestjs/common": ^12.0.0
+      "@nestjs/core": ^12.0.0
+      "@nestjs/microservices": ^12.0.0
+      "@nestjs/platform-express": ^12.0.0
+    peerDependenciesMeta:
+      "@nestjs/microservices":
+        optional: true
+      "@nestjs/platform-express":
+        optional: true
+
   "@next/env@16.3.5":
     resolution:
       {
@@ -3022,6 +3044,12 @@ packages:
         integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==,
       }
 
+  "@types/cookiejar@2.1.5":
+    resolution:
+      {
+        integrity: sha512-he+DHOWReW0nghN24E1WUqM0efK4kI9oTqDm6XmK8ZPe2djZ90BSNdGnIyCLzCPw7/pogPlGbzI2wHGGmi4O/Q==,
+      }
+
   "@types/d3-array@3.0.3":
     resolution:
       {
@@ -3142,6 +3170,12 @@ packages:
         integrity: sha512-+K1NIO8I+F9/wNulfVvu23QYd0Pe9/OCqRrim4NoYIf1VoEDL90Ve4ClzpyqBLc7NpGGWRvYNCKZ1BE/Jpf8dQ==,
       }
 
+  "@types/methods@1.1.4":
+    resolution:
+      {
+        integrity: sha512-ymXWVrDiCxTBE3+RIrrP533E70eA+9qu7zdWoHuOmGujkYtzf4HQF96b8nwHLqhuf4ykX61IGRIB38CC6/sImQ==,
+      }
+
   "@types/node@18.19.130":
     resolution:
       {
@@ -3196,6 +3230,18 @@ packages:
     resolution:
       {
         integrity: sha512-oGdxhBqcRTwSTKFm+9EiKzkNVYRLEFkcW44lhguvBalGJbWfGnDt/ezwSUZc+SF9m9bMc3VyklNAtp7zICjS5w==,
+      }
+
+  "@types/superagent@8.1.11":
+    resolution:
+      {
+        integrity: sha512-KA7srSW/HENDtOw9DOqaFLgWuMqN9WgjEw62lh9dpvRaZDkhdOkazASd7X7i2eMUYLHa1U37ZttnePsH5zTDHw==,
+      }
+
+  "@types/supertest@7.2.1":
+    resolution:
+      {
+        integrity: sha512-4CbBvoYVLHL7+yhbYrZET0vsvuyXTC05aRe7dNQkwMzm56auceoy6Yu3K50uZmwfHna1os3CMSgM/3QVkUtPTw==,
       }
 
   "@typescript-eslint/eslint-plugin@8.50.0":
@@ -5291,6 +5337,15 @@ packages:
       }
     engines: { node: ">=12.0.0" }
 
+  express-rate-limit@8.7.0:
+    resolution:
+      {
+        integrity: sha512-hOwV7WOxXfjRpAM1DSJWZDXx3GhplwD8IfwuwvogD8i1Qnkgosw/H45s4ZnFAUHDAhPjlY9hLBvJhKmGMyY26g==,
+      }
+    engines: { node: ">= 16" }
+    peerDependencies:
+      express: ">= 4.11"
+
   express@5.2.1:
     resolution:
       {
@@ -5787,6 +5842,13 @@ packages:
       }
     hasBin: true
 
+  helmet@8.3.0:
+    resolution:
+      {
+        integrity: sha512-Qgpiaws3Sm30Av8Eah6sjMCZZwjlBu+E68rhpCWBshY1lb09HtLwj5GviX0OyQIn+ulUS0iX0AxN5n3tLZzz1w==,
+      }
+    engines: { node: ">=18.0.0" }
+
   hmac-drbg@1.0.1:
     resolution:
       {
@@ -5932,6 +5994,13 @@ packages:
         integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==,
       }
     engines: { node: ">=12" }
+
+  ip-address@10.7.0:
+    resolution:
+      {
+        integrity: sha512-BGFsyJd5mpXp3rK6jIdADLNgpJUK1jnjzvYF8lK+VyDab9JAmqN0YOKDdP17HlgKb2+ehPgDc8EtnRLbGCAMhA==,
+      }
+    engines: { node: ">= 12" }
 
   ipaddr.js@1.9.1:
     resolution:
@@ -10145,6 +10214,14 @@ snapshots:
       "@grpc/proto-loader": 0.8.1
       "@prisma/client": 7.10.0(prisma@7.10.0(@types/node@24.10.1)(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3))(typescript@5.9.3)
 
+  "@nestjs/testing@12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.0.1)(@nestjs/platform-express@12.0.1)":
+    dependencies:
+      "@nestjs/common": 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
+      "@nestjs/core": 12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/platform-express@12.0.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      tslib: 2.8.1
+    optionalDependencies:
+      "@nestjs/platform-express": 12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.0.1)(supports-color@8.1.1)
+
   "@next/env@16.3.5": {}
 
   "@next/swc-darwin-arm64@16.3.5":
@@ -10754,6 +10831,8 @@ snapshots:
       "@types/deep-eql": 4.0.2
       assertion-error: 2.0.1
 
+  "@types/cookiejar@2.1.5": {}
+
   "@types/d3-array@3.0.3": {}
 
   "@types/d3-color@3.1.0": {}
@@ -10809,6 +10888,8 @@ snapshots:
 
   "@types/lodash@4.17.25": {}
 
+  "@types/methods@1.1.4": {}
+
   "@types/node@18.19.130":
     dependencies:
       undici-types: 5.26.5
@@ -10841,6 +10922,18 @@ snapshots:
   "@types/ssh2@1.15.6":
     dependencies:
       "@types/node": 18.19.130
+
+  "@types/superagent@8.1.11":
+    dependencies:
+      "@types/cookiejar": 2.1.5
+      "@types/methods": 1.1.4
+      "@types/node": 24.10.1
+      form-data: 4.0.6
+
+  "@types/supertest@7.2.1":
+    dependencies:
+      "@types/methods": 1.1.4
+      "@types/superagent": 8.1.11
 
   "@typescript-eslint/eslint-plugin@8.50.0(@typescript-eslint/parser@8.50.0(eslint@9.39.1(jiti@2.7.0)(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3))(eslint@9.39.1(jiti@2.7.0)(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)":
     dependencies:
@@ -12260,6 +12353,14 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  express-rate-limit@8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1):
+    dependencies:
+      debug: 4.4.3(supports-color@8.1.1)
+      express: 5.2.1(supports-color@8.1.1)
+      ip-address: 10.7.0
+    transitivePeerDependencies:
+      - supports-color
+
   express@5.2.1(supports-color@8.1.1):
     dependencies:
       accepts: 2.0.0
@@ -12581,6 +12682,8 @@ snapshots:
 
   he@1.2.0: {}
 
+  helmet@8.3.0: {}
+
   hmac-drbg@1.0.1:
     dependencies:
       hash.js: 1.1.7
@@ -12666,6 +12769,8 @@ snapshots:
   inherits@2.0.4: {}
 
   internmap@2.0.3: {}
+
+  ip-address@10.7.0: {}
 
   ipaddr.js@1.9.1: {}
 
