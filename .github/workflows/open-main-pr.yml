@@ -27,9 +27,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           head_sha="$(git rev-parse HEAD)"
+          head_ref="$REPOSITORY_OWNER:develop"
 
           gh api "repos/$REPOSITORY/statuses/$head_sha" \
             -X POST \
@@ -42,7 +44,7 @@ jobs:
             gh pr list \
               --repo "$REPOSITORY" \
               --base main \
-              --head develop \
+              --head "$head_ref" \
               --state open \
               --json number \
               --jq '.[0].number // empty'
@@ -53,9 +55,27 @@ jobs:
             exit 0
           fi
 
-          gh pr create \
-            --repo "$REPOSITORY" \
-            --base main \
-            --head develop \
-            --title "chore: promote develop to main" \
-            --body "Automatic PR opened after a manual merge into develop."
+          set +e
+          create_output="$(
+            gh pr create \
+              --repo "$REPOSITORY" \
+              --base main \
+              --head develop \
+              --title "chore: promote develop to main" \
+              --body "Automatic PR opened after a manual merge into develop." 2>&1
+          )"
+          create_status="$?"
+          set -e
+
+          echo "$create_output"
+
+          if [ "$create_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if echo "$create_output" | grep -qi "already exists"; then
+            echo "PR develop -> main already exists."
+            exit 0
+          fi
+
+          exit "$create_status"
