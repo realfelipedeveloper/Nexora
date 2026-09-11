@@ -1,0 +1,54 @@
+name: PR Guardrails
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Git Flow and Conventional Commit title
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+
+          conventional='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: .+'
+          work_branch='^(feature|fix|refactor|test|docs|chore|hotfix)/[a-z0-9._/-]+$'
+
+          if [[ ! "$PR_TITLE" =~ $conventional ]]; then
+            echo "PR title must follow Conventional Commits."
+            echo "Received: $PR_TITLE"
+            echo "Example: feat(cms): add content type editor"
+            exit 1
+          fi
+
+          case "$BASE_REF" in
+            develop)
+              if [[ ! "$HEAD_REF" =~ $work_branch ]]; then
+                echo "PRs into develop must come from feature/*, fix/*, refactor/*, test/*, docs/*, chore/*, or hotfix/*."
+                echo "Received head branch: $HEAD_REF"
+                exit 1
+              fi
+              ;;
+            main)
+              if [[ "$HEAD_REF" != "develop" ]]; then
+                echo "Only develop may open PRs into main."
+                echo "Received head branch: $HEAD_REF"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported PR base branch: $BASE_REF"
+              echo "Use develop for work branches and main only for develop promotion."
+              exit 1
+              ;;
+          esac
+
+          echo "PR guardrails passed."
