@@ -1,6 +1,112 @@
 name: nexora
 
 services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXORA_TARGET: "@nexora/web"
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${WEB_PUBLIC_PORT:-48110}:48110"
+    depends_on:
+      core-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:48110 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  cms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXORA_TARGET: "@nexora/cms"
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${CMS_PORT:-48111}:48111"
+    depends_on:
+      core-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:48111 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  core-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXORA_TARGET: "@nexora/core-api"
+    environment:
+      CORE_API_PORT: 48120
+      DATABASE_URL: postgresql://nexora:nexora_dev_password@postgres:5432/nexora?schema=public
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://nexora:nexora_dev_password@rabbitmq:5672
+      MINIO_ENDPOINT: http://minio:9000
+    ports:
+      - "${CORE_API_PORT:-48120}:48120"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:48120/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  notification-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXORA_TARGET: "@nexora/notification-api"
+    environment:
+      NOTIFICATION_API_PORT: 48121
+      RABBITMQ_URL: amqp://nexora:nexora_dev_password@rabbitmq:5672
+      MAILPIT_SMTP_HOST: mailpit
+      MAILPIT_SMTP_PORT: 1025
+    ports:
+      - "${NOTIFICATION_API_PORT:-48121}:48121"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:48121/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXORA_TARGET: "@nexora/worker"
+    environment:
+      RABBITMQ_URL: amqp://nexora:nexora_dev_password@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: postgres:17-alpine
     environment:
