@@ -2,6 +2,7 @@
   "name": "@nexora/core-api",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "dependencies": {
     "@nexora/config": "workspace:*"
   },
@@ -11,7 +12,7 @@
     "lint": "eslint . --max-warnings=0",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "prisma migrate deploy --schema prisma/schema.prisma",
-    "start": "node dist/main.js",
+    "start": "node dist/services/core-api/src/main.js",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
