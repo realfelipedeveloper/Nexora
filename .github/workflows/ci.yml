@@ -24,4 +24,5 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm secret:scan
-      - run: pnpm sbom
+      - run: pnpm run sca
+      - run: pnpm run sbom
