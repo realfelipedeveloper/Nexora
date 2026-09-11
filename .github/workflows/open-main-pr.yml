@@ -1,0 +1,50 @@
+name: Open Main PR
+
+on:
+  push:
+    branches: [develop]
+
+  pull_request:
+    branches: [develop]
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-main-pr:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Open develop to main PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          existing_pr="$(
+            gh pr list \
+              --repo "$REPOSITORY" \
+              --base main \
+              --head develop \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [ -n "$existing_pr" ]; then
+            echo "PR develop -> main already open: #$existing_pr"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$REPOSITORY" \
+            --base main \
+            --head develop \
+            --title "chore: promote develop to main" \
+            --body "Automatic PR opened after a manual merge into develop."
