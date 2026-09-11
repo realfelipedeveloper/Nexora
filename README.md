@@ -20,3 +20,13 @@ pnpm test
 ## Ports
 
 The local stack uses the `481xx` range. See `.env.example` for the default values.
+
+## Repository workflow
+
+All project work must use Git Flow with Conventional Commits:
+
+- Create work branches from `develop` using `feature/*`, `fix/*`, `docs/*`, `chore/*`, `refactor/*`, `test/*`, or `hotfix/*`.
+- Open pull requests from work branches into `develop`; the project owner reviews and merges them manually.
+- After `develop` is merged, automation opens the `develop` to `main` pull request.
+- Pull request titles and commit messages must follow Conventional Commits.
+- Do not commit or push internal documentation sources, SDD material, agents, skills, or the `nexora-sdd-engineering-loop/` directory.
