@@ -1,0 +1,25 @@
+export const initialBlockTypes = [
+  "Hero",
+  "Text",
+  "RichText",
+  "Image",
+  "Gallery",
+  "Video",
+  "Cards",
+  "CTA",
+  "Accordion",
+  "Tabs",
+  "FAQ",
+  "Testimonials",
+  "Team",
+  "Stats",
+  "Map",
+  "Form",
+  "Embed",
+  "Spacer",
+  "Columns",
+  "Carousel",
+  "ContentList",
+] as const;
+
+export type InitialBlockType = (typeof initialBlockTypes)[number];

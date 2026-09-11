@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmitOnError": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@nexora/blocks": ["packages/blocks/src/index.ts"],
+      "@nexora/cms-sdk": ["packages/cms-sdk/src/index.ts"],
+      "@nexora/config": ["packages/config/src/index.ts"],
+      "@nexora/contracts": ["packages/contracts/src/index.ts"],
+      "@nexora/design-system": ["packages/design-system/src/index.ts"],
+      "@nexora/schemas": ["packages/schemas/src/index.ts"],
+      "@nexora/testing": ["packages/testing/src/index.ts"]
+    },
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022"
+  }
+}

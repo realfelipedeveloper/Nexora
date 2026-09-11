@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Site {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  locales      Locale[]
+  contentTypes ContentType[]
+}
+
+model Locale {
+  id        String   @id @default(uuid())
+  siteId    String
+  code      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, code])
+}
+
+model ContentType {
+  id            String   @id @default(uuid())
+  siteId        String
+  key           String
+  displayName   String
+  schemaVersion Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  site   Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  fields FieldDefinition[]
+
+  @@unique([siteId, key])
+}
+
+model FieldDefinition {
+  id            String   @id @default(uuid())
+  contentTypeId String
+  key           String
+  label         String
+  fieldType     String
+  required      Boolean  @default(false)
+  position      Int      @default(0)
+  config        Json     @default("{}")
+  createdAt     DateTime @default(now())
+
+  contentType ContentType @relation(fields: [contentTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([contentTypeId, key])
+}
+
+model AuditEvent {
+  id        String   @id @default(uuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+}

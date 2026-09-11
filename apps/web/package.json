@@ -1,0 +1,16 @@
+{
+  "name": "@nexora/web",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@nexora/contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev --port 48110",
+    "lint": "eslint . --max-warnings=0",
+    "start": "next start --port 48110",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

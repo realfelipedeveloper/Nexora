@@ -1,0 +1,13 @@
+{
+  "name": "@nexora/notification-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "lint": "eslint . --max-warnings=0",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+coverage/
+storybook-static/
+.nx/
+
+# Runtime and caches
+.env
+.env.*
+!.env.example
+*.log
+tmp/
+.cache/
+
+# Local SDD, docs, agents, and skills must never be pushed.
+nexora-sdd-engineering-loop/
+docs/
+**/docs/
+sdd/
+**/sdd/
+.agents/
+**/.agents/
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+agents/
+**/agents/
+skills/
+**/skills/
+adr/
+**/adr/
+completion-report*
+**/completion-report*
+*.completion.md
+
+# Tooling
+.DS_Store
+Thumbs.db
