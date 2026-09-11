@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   open-main-pr:
@@ -26,7 +27,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          head_sha="$(git rev-parse HEAD)"
+
+          gh api "repos/$REPOSITORY/statuses/$head_sha" \
+            -X POST \
+            -f state=success \
+            -f context=validate-pr \
+            -f description="develop to main promotion validated" \
+            -f target_url="$RUN_URL"
+
           existing_pr="$(
             gh pr list \
               --repo "$REPOSITORY" \
