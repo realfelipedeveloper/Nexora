@@ -14,6 +14,7 @@ allowBuilds:
   "@nestjs/core": true
   "@prisma/client": true
   "@prisma/engines": true
+  "@scarf/scarf": false
   core-js-pure: true
   cpu-features: true
   esbuild: true
