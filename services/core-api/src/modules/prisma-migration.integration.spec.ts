@@ -3,12 +3,23 @@ import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { Test } from "@nestjs/testing";
+import type { INestApplication } from "@nestjs/common";
+import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PRISMA_CLIENT } from "../database/database.module.js";
 import { createPrismaClient } from "../database/prisma-client.js";
+import { configureHttpSecurity } from "./http-security.js";
 import {
   AdminAlreadyProvisionedError,
   provisionInitialAdmin,
 } from "./identity/admin-provisioning.js";
+import { hashPassword } from "./identity/credentials.js";
+import { IDENTITY_CONFIGURATION } from "./identity/identity.config.js";
+import { IdentityController } from "./identity/identity.controller.js";
+import { IdentityService } from "./identity/identity.service.js";
+import { sessionCookieName } from "./identity/session-security.js";
+import { hashSessionToken } from "./identity/session-token.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -187,6 +198,109 @@ describe("Prisma baseline migration", () => {
         }),
       ).resolves.toBe(1);
     } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("authenticates and revokes an HTTP session with cookie and CSRF protection", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const password = "correct horse battery staple";
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Session Admin",
+        email: "Session.Admin@example.com",
+        normalizedEmail: "session.admin@example.com",
+        passwordHash: await hashPassword(password),
+      },
+    });
+    const moduleRef = await Test.createTestingModule({
+      controllers: [IdentityController],
+      providers: [
+        IdentityService,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+        {
+          provide: IDENTITY_CONFIGURATION,
+          useValue: { secureCookies: true, sessionTtlMs: 8 * 60 * 60 * 1_000 },
+        },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    configureHttpSecurity(app);
+    await app.init();
+
+    try {
+      const unknownUser = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: "unknown@example.com", password })
+        .expect(401);
+      const wrongPassword = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: user.email, password: "incorrect password value" })
+        .expect(401);
+      expect(wrongPassword.body).toEqual(unknownUser.body);
+
+      const login = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: "  SESSION.ADMIN@example.com ", password })
+        .expect(200);
+      const setCookies = login.headers["set-cookie"] as unknown as string[];
+      const sessionCookie = setCookies[0]?.split(";", 1)[0];
+      expect(sessionCookie).toMatch(new RegExp(`^${sessionCookieName}=[A-Za-z0-9_-]{43}$`, "u"));
+      expect(setCookies[0]).toContain("HttpOnly");
+      expect(setCookies[0]).toContain("SameSite=Strict");
+      expect(setCookies[0]).toContain("Path=/");
+      expect(setCookies[0]).toContain("Secure");
+      expect(login.body).not.toHaveProperty("sessionToken");
+
+      const rawSessionToken = sessionCookie?.slice(sessionCookieName.length + 1) ?? "";
+      const storedSession = await prisma.session.findUniqueOrThrow({
+        where: { tokenHash: hashSessionToken(rawSessionToken) },
+      });
+      expect(storedSession.tokenHash).not.toBe(rawSessionToken);
+
+      const current = await request(app.getHttpServer())
+        .get("/auth/session")
+        .set("Cookie", sessionCookie ?? "")
+        .expect(200);
+      expect(current.body).toMatchObject({
+        csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+        user: {
+          displayName: "Session Admin",
+          email: "Session.Admin@example.com",
+          id: user.id,
+        },
+      });
+
+      await request(app.getHttpServer())
+        .post("/auth/logout")
+        .set("Cookie", sessionCookie ?? "")
+        .set("x-csrf-token", "b".repeat(43))
+        .expect(403);
+      await expect(
+        prisma.session.findUniqueOrThrow({ where: { id: storedSession.id } }),
+      ).resolves.toMatchObject({ revokedAt: null });
+
+      const logout = await request(app.getHttpServer())
+        .post("/auth/logout")
+        .set("Cookie", sessionCookie ?? "")
+        .set("x-csrf-token", current.body.csrfToken as string)
+        .expect(204);
+      expect(logout.headers["set-cookie"]?.[0]).toContain(`${sessionCookieName}=;`);
+      await request(app.getHttpServer())
+        .get("/auth/session")
+        .set("Cookie", sessionCookie ?? "")
+        .expect(401);
+
+      await expect(
+        prisma.auditEvent.count({
+          where: {
+            actorId: user.id,
+            action: { in: ["identity.session.created", "identity.session.revoked"] },
+          },
+        }),
+      ).resolves.toBe(2);
+    } finally {
+      await app.close();
       await prisma.$disconnect();
     }
   }, 120_000);
