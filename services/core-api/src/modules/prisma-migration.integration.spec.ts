@@ -18,6 +18,7 @@ import { hashPassword } from "./identity/credentials.js";
 import { IDENTITY_CONFIGURATION } from "./identity/identity.config.js";
 import { IdentityController } from "./identity/identity.controller.js";
 import { IdentityService } from "./identity/identity.service.js";
+import { SessionAuthenticationGuard } from "./identity/session-authentication.guard.js";
 import { sessionCookieName } from "./identity/session-security.js";
 import { hashSessionToken } from "./identity/session-token.js";
 
@@ -217,10 +218,15 @@ describe("Prisma baseline migration", () => {
       controllers: [IdentityController],
       providers: [
         IdentityService,
+        SessionAuthenticationGuard,
         { provide: PRISMA_CLIENT, useValue: prisma },
         {
           provide: IDENTITY_CONFIGURATION,
-          useValue: { secureCookies: true, sessionTtlMs: 8 * 60 * 60 * 1_000 },
+          useValue: {
+            secureCookies: true,
+            sessionRotationIntervalMs: 15 * 60 * 1_000,
+            sessionTtlMs: 8 * 60 * 60 * 1_000,
+          },
         },
       ],
     }).compile();
@@ -257,11 +263,20 @@ describe("Prisma baseline migration", () => {
         where: { tokenHash: hashSessionToken(rawSessionToken) },
       });
       expect(storedSession.tokenHash).not.toBe(rawSessionToken);
+      await prisma.session.update({
+        data: { lastSeenAt: new Date(Date.now() - 20 * 60 * 1_000) },
+        where: { id: storedSession.id },
+      });
 
       const current = await request(app.getHttpServer())
         .get("/auth/session")
         .set("Cookie", sessionCookie ?? "")
         .expect(200);
+      const rotatedSetCookies = current.headers["set-cookie"] as unknown as string[];
+      const rotatedCookie = rotatedSetCookies[0]?.split(";", 1)[0];
+      expect(rotatedCookie).toMatch(new RegExp(`^${sessionCookieName}=[A-Za-z0-9_-]{43}$`, "u"));
+      expect(rotatedCookie).not.toBe(sessionCookie);
+      expect(current.headers["x-csrf-token"]).toBe(current.body.csrfToken);
       expect(current.body).toMatchObject({
         csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
         user: {
@@ -270,10 +285,14 @@ describe("Prisma baseline migration", () => {
           id: user.id,
         },
       });
+      await request(app.getHttpServer())
+        .get("/auth/session")
+        .set("Cookie", sessionCookie ?? "")
+        .expect(401);
 
       await request(app.getHttpServer())
         .post("/auth/logout")
-        .set("Cookie", sessionCookie ?? "")
+        .set("Cookie", rotatedCookie ?? "")
         .set("x-csrf-token", "b".repeat(43))
         .expect(403);
       await expect(
@@ -282,23 +301,29 @@ describe("Prisma baseline migration", () => {
 
       const logout = await request(app.getHttpServer())
         .post("/auth/logout")
-        .set("Cookie", sessionCookie ?? "")
+        .set("Cookie", rotatedCookie ?? "")
         .set("x-csrf-token", current.body.csrfToken as string)
         .expect(204);
       expect(logout.headers["set-cookie"]?.[0]).toContain(`${sessionCookieName}=;`);
       await request(app.getHttpServer())
         .get("/auth/session")
-        .set("Cookie", sessionCookie ?? "")
+        .set("Cookie", rotatedCookie ?? "")
         .expect(401);
 
       await expect(
         prisma.auditEvent.count({
           where: {
             actorId: user.id,
-            action: { in: ["identity.session.created", "identity.session.revoked"] },
+            action: {
+              in: [
+                "identity.session.created",
+                "identity.session.revoked",
+                "identity.session.rotated",
+              ],
+            },
           },
         }),
-      ).resolves.toBe(2);
+      ).resolves.toBe(3);
     } finally {
       await app.close();
       await prisma.$disconnect();
