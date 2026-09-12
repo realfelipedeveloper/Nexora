@@ -5,12 +5,17 @@ import {
   AuthenticationFailedError,
   CsrfValidationError,
   IdentityService,
+  SessionRotationConflictError,
 } from "./identity.service.js";
 import { deriveCsrfToken } from "./session-security.js";
 
 const now = new Date("2030-01-01T00:00:00.000Z");
 const sessionToken = "a".repeat(43);
 let passwordHash: string;
+const configuration = {
+  sessionRotationIntervalMs: 15 * 60 * 1_000,
+  sessionTtlMs: 8 * 60 * 60 * 1_000,
+};
 
 function prismaMock() {
   const transaction = {
@@ -38,7 +43,19 @@ function activeUser() {
     id: "user-1",
     isSystemAdmin: true,
     passwordHash,
+    passwordChangedAt: new Date("2029-12-01T00:00:00.000Z"),
     status: "ACTIVE" as const,
+  };
+}
+
+function activeSession() {
+  return {
+    createdAt: new Date("2029-12-31T23:00:00.000Z"),
+    expiresAt: new Date("2030-01-01T08:00:00.000Z"),
+    id: "session-1",
+    lastSeenAt: new Date("2029-12-31T23:55:00.000Z"),
+    revokedAt: null as Date | null,
+    user: activeUser(),
   };
 }
 
@@ -95,9 +112,7 @@ describe("IdentityService", () => {
   ])("returns the same failure for invalid credentials", async ({ candidate, email, user }) => {
     const prisma = prismaMock();
     prisma.user.findUnique.mockResolvedValue(user());
-    const service = new IdentityService(prisma as unknown as PrismaClient, {
-      sessionTtlMs: 8 * 60 * 60 * 1_000,
-    });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.login(email, candidate)).rejects.toEqual(new AuthenticationFailedError());
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -106,9 +121,7 @@ describe("IdentityService", () => {
   it("creates an opaque session and audit event atomically", async () => {
     const prisma = prismaMock();
     prisma.user.findUnique.mockResolvedValue(activeUser());
-    const service = new IdentityService(prisma as unknown as PrismaClient, {
-      sessionTtlMs: 8 * 60 * 60 * 1_000,
-    });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     const result = await service.login("  ADMIN@example.com ", "correct horse battery staple");
 
@@ -142,14 +155,8 @@ describe("IdentityService", () => {
 
   it("returns the current active session without exposing its stored hash", async () => {
     const prisma = prismaMock();
-    prisma.session.findUnique.mockResolvedValue({
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      revokedAt: null,
-      user: activeUser(),
-    });
-    const service = new IdentityService(prisma as unknown as PrismaClient, {
-      sessionTtlMs: 1,
-    });
+    prisma.session.findUnique.mockResolvedValue(activeSession());
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.currentSession(sessionToken)).resolves.toEqual({
       csrfToken: deriveCsrfToken(sessionToken),
@@ -165,7 +172,7 @@ describe("IdentityService", () => {
 
   it("rejects a request without a session token before querying persistence", async () => {
     const prisma = prismaMock();
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.currentSession(undefined)).rejects.toBeInstanceOf(
       AuthenticationFailedError,
@@ -175,25 +182,17 @@ describe("IdentityService", () => {
 
   it.each([
     null,
+    { ...activeSession(), expiresAt: new Date("2029-12-31T23:59:59.000Z") },
+    { ...activeSession(), revokedAt: now },
+    { ...activeSession(), user: { ...activeUser(), status: "DISABLED" as const } },
     {
-      expiresAt: new Date("2029-12-31T23:59:59.000Z"),
-      revokedAt: null,
-      user: activeUser(),
-    },
-    {
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      revokedAt: now,
-      user: activeUser(),
-    },
-    {
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      revokedAt: null,
-      user: { ...activeUser(), status: "DISABLED" as const },
+      ...activeSession(),
+      user: { ...activeUser(), passwordChangedAt: new Date("2029-12-31T23:30:00.000Z") },
     },
   ])("rejects a missing or inactive current session", async (session) => {
     const prisma = prismaMock();
     prisma.session.findUnique.mockResolvedValue(session);
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.currentSession(sessionToken)).rejects.toBeInstanceOf(
       AuthenticationFailedError,
@@ -202,13 +201,8 @@ describe("IdentityService", () => {
 
   it("requires a session-bound CSRF token before logout", async () => {
     const prisma = prismaMock();
-    prisma.session.findUnique.mockResolvedValue({
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      id: "session-1",
-      revokedAt: null,
-      user: activeUser(),
-    });
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    prisma.session.findUnique.mockResolvedValue(activeSession());
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.logout(sessionToken, "b".repeat(43))).rejects.toBeInstanceOf(
       CsrfValidationError,
@@ -218,13 +212,8 @@ describe("IdentityService", () => {
 
   it("revokes a session and audits logout atomically", async () => {
     const prisma = prismaMock();
-    prisma.session.findUnique.mockResolvedValue({
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      id: "session-1",
-      revokedAt: null,
-      user: activeUser(),
-    });
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    prisma.session.findUnique.mockResolvedValue(activeSession());
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await service.logout(sessionToken, deriveCsrfToken(sessionToken));
 
@@ -245,14 +234,9 @@ describe("IdentityService", () => {
 
   it("does not duplicate the logout audit when another request revoked the session", async () => {
     const prisma = prismaMock();
-    prisma.session.findUnique.mockResolvedValue({
-      expiresAt: new Date("2030-01-01T08:00:00.000Z"),
-      id: "session-1",
-      revokedAt: null,
-      user: activeUser(),
-    });
+    prisma.session.findUnique.mockResolvedValue(activeSession());
     prisma.transaction.session.updateMany.mockResolvedValue({ count: 0 });
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await service.logout(sessionToken, deriveCsrfToken(sessionToken));
 
@@ -262,10 +246,61 @@ describe("IdentityService", () => {
   it("treats logout without an active session as an idempotent success", async () => {
     const prisma = prismaMock();
     prisma.session.findUnique.mockResolvedValue(null);
-    const service = new IdentityService(prisma as unknown as PrismaClient, { sessionTtlMs: 1 });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
 
     await expect(service.logout(undefined, undefined)).resolves.toBeUndefined();
     await expect(service.logout(sessionToken, undefined)).resolves.toBeUndefined();
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rotates an old session token and audits the single winning update", async () => {
+    const prisma = prismaMock();
+    const session = {
+      ...activeSession(),
+      lastSeenAt: new Date("2029-12-31T23:40:00.000Z"),
+    };
+    prisma.session.findUnique.mockResolvedValue(session);
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
+
+    const result = await service.authenticateSession(sessionToken);
+
+    expect(result.rotated).toBe(true);
+    expect(result.sessionToken).not.toBe(sessionToken);
+    expect(prisma.transaction.session.updateMany).toHaveBeenCalledWith({
+      data: {
+        lastSeenAt: now,
+        tokenHash: expect.any(String),
+      },
+      where: {
+        id: "session-1",
+        lastSeenAt: session.lastSeenAt,
+        revokedAt: null,
+        tokenHash: expect.any(String),
+      },
+    });
+    expect(prisma.transaction.auditEvent.create).toHaveBeenCalledWith({
+      data: {
+        action: "identity.session.rotated",
+        actorId: "user-1",
+        entity: "Session",
+        entityId: "session-1",
+        metadata: {},
+      },
+    });
+  });
+
+  it("fails closed when a concurrent request wins rotation", async () => {
+    const prisma = prismaMock();
+    prisma.session.findUnique.mockResolvedValue({
+      ...activeSession(),
+      lastSeenAt: new Date("2029-12-31T23:40:00.000Z"),
+    });
+    prisma.transaction.session.updateMany.mockResolvedValue({ count: 0 });
+    const service = new IdentityService(prisma as unknown as PrismaClient, configuration);
+
+    await expect(service.authenticateSession(sessionToken)).rejects.toBeInstanceOf(
+      SessionRotationConflictError,
+    );
+    expect(prisma.transaction.auditEvent.create).not.toHaveBeenCalled();
   });
 });

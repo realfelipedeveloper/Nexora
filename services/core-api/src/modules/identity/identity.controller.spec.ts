@@ -24,11 +24,6 @@ function responseMock() {
 
 function serviceMock() {
   return {
-    currentSession: vi.fn().mockResolvedValue({
-      csrfToken: deriveCsrfToken(sessionToken),
-      expiresAt,
-      user: { displayName: "Admin", email: "admin@example.com", id: "user-1" },
-    }),
     login: vi.fn().mockResolvedValue({
       csrfToken: deriveCsrfToken(sessionToken),
       expiresAt,
@@ -120,16 +115,30 @@ describe("IdentityController", () => {
     ).rejects.toMatchObject({ message: "Invalid email or password.", status: 401 });
   });
 
-  it("reads the current session from the cookie", async () => {
+  it("returns the identity established by the authentication guard", () => {
     const service = serviceMock();
     const controller = new IdentityController(service as unknown as IdentityService, {
       secureCookies: false,
     });
+    const identity = {
+      csrfToken: deriveCsrfToken(sessionToken),
+      expiresAt,
+      sessionId: "session-1",
+      user: {
+        displayName: "Admin",
+        email: "admin@example.com",
+        id: "user-1",
+        isSystemAdmin: true,
+      },
+    };
 
-    await expect(
-      controller.currentSession(`theme=dark; ${sessionCookieName}=${sessionToken}`),
-    ).resolves.toMatchObject({ user: { id: "user-1" } });
-    expect(service.currentSession).toHaveBeenCalledWith(sessionToken);
+    expect(controller.currentSession({ headers: {}, identity })).toEqual({
+      csrfToken: identity.csrfToken,
+      expiresAt: identity.expiresAt,
+      user: identity.user,
+    });
+    expect(controller.currentSession({ headers: {}, identity })).not.toHaveProperty("sessionId");
+    expect(() => controller.currentSession({ headers: {} })).toThrow(UnauthorizedException);
   });
 
   it("requires CSRF for an active logout and clears the cookie after success", async () => {
@@ -183,11 +192,6 @@ describe("IdentityController", () => {
         responseMock(),
       ),
     ).rejects.toBe(failure);
-
-    service.currentSession.mockRejectedValueOnce(failure);
-    await expect(controller.currentSession(`${sessionCookieName}=${sessionToken}`)).rejects.toBe(
-      failure,
-    );
 
     service.logout.mockRejectedValueOnce(failure);
     await expect(
