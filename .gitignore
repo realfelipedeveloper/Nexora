@@ -9,6 +9,8 @@ build/
 coverage/
 storybook-static/
 .nx/
+test-results/
+playwright-report/
 
 # Runtime and caches
 .env
