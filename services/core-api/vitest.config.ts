@@ -14,7 +14,7 @@ export default defineConfig({
     exclude: ["dist/**"],
     globals: true,
     coverage: {
-      exclude: ["src/**/*.spec.ts"],
+      exclude: ["src/**/*.spec.ts", "src/cli/provision-admin.ts"],
       include: ["src/**/*.ts"],
       provider: "v8",
       reporter: ["text", "json-summary"],

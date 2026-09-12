@@ -17,6 +17,7 @@ model User {
   normalizedEmail   String     @unique
   displayName       String
   passwordHash      String
+  isSystemAdmin     Boolean    @default(false)
   status            UserStatus @default(ACTIVE)
   passwordChangedAt DateTime   @default(now())
   createdAt         DateTime   @default(now())

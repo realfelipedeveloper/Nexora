@@ -5,9 +5,12 @@
   "type": "module",
   "dependencies": {
     "@nexora/config": "workspace:*",
-    "argon2": "0.45.1"
+    "@prisma/adapter-pg": "7.10.0",
+    "argon2": "0.45.1",
+    "pg": "8.23.0"
   },
   "scripts": {
+    "admin:provision": "tsx src/cli/provision-admin.ts",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/main.ts",
     "lint": "eslint . --max-warnings=0",
@@ -17,5 +20,8 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
   }
 }
