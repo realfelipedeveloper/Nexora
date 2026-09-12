@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
   statuses: write
 
 jobs:
@@ -18,9 +17,19 @@ jobs:
           ref: develop
           fetch-depth: 0
 
+      - name: Generate promotion app token
+        id: promotion-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.NEXORA_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.NEXORA_PROMOTION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Nexora
+
       - name: Open develop to main PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.promotion-token.outputs.token }}
+          STATUS_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -28,7 +37,7 @@ jobs:
           head_sha="$(git rev-parse HEAD)"
           head_ref="$REPOSITORY_OWNER:develop"
 
-          gh api "repos/$REPOSITORY/statuses/$head_sha" \
+          GH_TOKEN="$STATUS_TOKEN" gh api "repos/$REPOSITORY/statuses/$head_sha" \
             -X POST \
             -f state=success \
             -f context=validate-pr \
