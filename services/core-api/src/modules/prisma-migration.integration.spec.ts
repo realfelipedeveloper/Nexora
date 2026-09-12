@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrismaClient } from "../database/prisma-client.js";
+import {
+  AdminAlreadyProvisionedError,
+  provisionInitialAdmin,
+} from "./identity/admin-provisioning.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -150,5 +155,39 @@ describe("Prisma baseline migration", () => {
 
     expect(cascadeDelete.exitCode).toBe(0);
     expect(cascadeDelete.output.split(/\s+/).filter(Boolean).at(-1)).toBe("0");
+  }, 120_000);
+
+  it("allows only one concurrent initial administrator with one audit event", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const attempts = await Promise.allSettled([
+        provisionInitialAdmin(prisma, {
+          displayName: "First Admin",
+          email: "first@example.com",
+          password: "first secure administrator password",
+        }),
+        provisionInitialAdmin(prisma, {
+          displayName: "Second Admin",
+          email: "second@example.com",
+          password: "second secure administrator password",
+        }),
+      ]);
+
+      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+      const rejection = attempts.find((attempt) => attempt.status === "rejected");
+      expect(rejection).toBeDefined();
+      expect((rejection as PromiseRejectedResult).reason).toBeInstanceOf(
+        AdminAlreadyProvisionedError,
+      );
+      await expect(prisma.user.count({ where: { isSystemAdmin: true } })).resolves.toBe(1);
+      await expect(
+        prisma.auditEvent.count({
+          where: { action: "identity.system_admin.provisioned" },
+        }),
+      ).resolves.toBe(1);
+    } finally {
+      await prisma.$disconnect();
+    }
   }, 120_000);
 });
