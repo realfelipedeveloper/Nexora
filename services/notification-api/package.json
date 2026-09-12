@@ -9,6 +9,7 @@
     "lint": "eslint . --max-warnings=0",
     "start": "node dist/main.js",
     "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
