@@ -17,6 +17,7 @@ playwright-report/
 .env.*
 !.env.example
 *.log
+*.pem
 tmp/
 .cache/
 
