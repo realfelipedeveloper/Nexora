@@ -14,6 +14,7 @@
     "prisma:migrate": "prisma migrate deploy --config prisma.config.ts",
     "start": "node dist/services/core-api/src/main.js",
     "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
