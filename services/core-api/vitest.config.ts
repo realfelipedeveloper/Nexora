@@ -23,6 +23,12 @@ export default defineConfig({
         functions: 40,
         lines: 50,
         statements: 50,
+        "src/modules/identity/**/*.ts": {
+          branches: 95,
+          functions: 95,
+          lines: 95,
+          statements: 95,
+        },
       },
     },
   },
