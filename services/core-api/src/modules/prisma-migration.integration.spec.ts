@@ -60,9 +60,95 @@ describe("Prisma baseline migration", () => {
         "ContentType",
         "FieldDefinition",
         "Locale",
+        "Session",
         "Site",
+        "User",
         "_prisma_migrations",
       ]),
     );
+
+    const identityConstraints = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        "\"SELECT conname FROM pg_constraint WHERE conname IN ('Session_expiry_after_creation_check', 'Session_userId_fkey') ORDER BY conname;\"",
+      ].join(" "),
+    ]);
+
+    expect(identityConstraints.exitCode).toBe(0);
+    expect(identityConstraints.output.split(/\s+/).filter(Boolean)).toEqual([
+      "Session_expiry_after_creation_check",
+      "Session_userId_fkey",
+    ]);
+
+    const insertUser = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-v ON_ERROR_STOP=1",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        `"INSERT INTO \\"User\\" (\\"id\\", \\"email\\", \\"normalizedEmail\\", \\"displayName\\", \\"passwordHash\\", \\"updatedAt\\") VALUES ('user-1', 'Admin@example.com', 'admin@example.com', 'Admin', 'argon2id-hash', CURRENT_TIMESTAMP);"`,
+      ].join(" "),
+    ]);
+
+    expect(insertUser.exitCode).toBe(0);
+
+    const duplicateEmail = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-v ON_ERROR_STOP=1",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        `"INSERT INTO \\"User\\" (\\"id\\", \\"email\\", \\"normalizedEmail\\", \\"displayName\\", \\"passwordHash\\", \\"updatedAt\\") VALUES ('user-2', 'ADMIN@example.com', 'admin@example.com', 'Duplicate', 'argon2id-hash', CURRENT_TIMESTAMP);"`,
+      ].join(" "),
+    ]);
+
+    expect(duplicateEmail.exitCode).not.toBe(0);
+
+    const expiredSession = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-v ON_ERROR_STOP=1",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        `"INSERT INTO \\"Session\\" (\\"id\\", \\"userId\\", \\"tokenHash\\", \\"expiresAt\\") VALUES ('expired-session', 'user-1', 'expired-token-hash', TIMESTAMP '2000-01-01 00:00:00');"`,
+      ].join(" "),
+    ]);
+
+    expect(expiredSession.exitCode).not.toBe(0);
+
+    const cascadeDelete = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-v ON_ERROR_STOP=1",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        `"INSERT INTO \\"Session\\" (\\"id\\", \\"userId\\", \\"tokenHash\\", \\"expiresAt\\") VALUES ('active-session', 'user-1', 'active-token-hash', CURRENT_TIMESTAMP + INTERVAL '1 hour'); DELETE FROM \\"User\\" WHERE \\"id\\" = 'user-1'; SELECT COUNT(*) FROM \\"Session\\" WHERE \\"id\\" = 'active-session';"`,
+      ].join(" "),
+    ]);
+
+    expect(cascadeDelete.exitCode).toBe(0);
+    expect(cascadeDelete.output.split(/\s+/).filter(Boolean).at(-1)).toBe("0");
   }, 120_000);
 });

@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@nexora/config": "workspace:*"
+    "@nexora/config": "workspace:*",
+    "argon2": "0.45.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
