@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Test } from "@nestjs/testing";
 import type { INestApplication } from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PRISMA_CLIENT } from "../database/database.module.js";
@@ -21,6 +22,9 @@ import { IdentityService } from "./identity/identity.service.js";
 import { SessionAuthenticationGuard } from "./identity/session-authentication.guard.js";
 import { sessionCookieName } from "./identity/session-security.js";
 import { hashSessionToken } from "./identity/session-token.js";
+import { SiteAccessController } from "./identity/site-access.controller.js";
+import { SiteAccessService } from "./identity/site-access.service.js";
+import { SiteAuthorizationGuard } from "./identity/site-authorization.guard.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -77,8 +81,12 @@ describe("Prisma baseline migration", () => {
         "ContentType",
         "FieldDefinition",
         "Locale",
+        "Permission",
+        "Role",
+        "RolePermission",
         "Session",
         "Site",
+        "SiteRoleAssignment",
         "User",
         "_prisma_migrations",
       ]),
@@ -169,6 +177,69 @@ describe("Prisma baseline migration", () => {
     expect(cascadeDelete.output.split(/\s+/).filter(Boolean).at(-1)).toBe("0");
   }, 120_000);
 
+  it("enforces seeded roles and isolates editorial access by site", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      await expect(prisma.permission.count()).resolves.toBe(10);
+      await expect(prisma.role.count()).resolves.toBe(4);
+      await expect(prisma.rolePermission.count()).resolves.toBe(24);
+
+      const user = await prisma.user.create({
+        data: {
+          displayName: "Scoped Editor",
+          email: "scoped.editor@example.com",
+          normalizedEmail: "scoped.editor@example.com",
+          passwordHash: "argon2id-hash",
+        },
+      });
+      const firstSite = await prisma.site.create({
+        data: { key: "rbac-first", name: "RBAC First" },
+      });
+      const secondSite = await prisma.site.create({
+        data: { key: "rbac-second", name: "RBAC Second" },
+      });
+      const assignment = await prisma.siteRoleAssignment.create({
+        data: {
+          grantedById: user.id,
+          roleKey: "editor",
+          siteId: firstSite.id,
+          userId: user.id,
+        },
+      });
+      const accessService = new SiteAccessService(prisma);
+
+      await expect(accessService.resolveSiteAccess(user.id, false, firstSite.id)).resolves.toEqual({
+        isSystemAdmin: false,
+        permissionKeys: ["content.read", "content.write", "media.read", "media.write", "site.read"],
+        roleKeys: ["editor"],
+        siteId: firstSite.id,
+      });
+      await expect(
+        accessService.resolveSiteAccess(user.id, false, secondSite.id),
+      ).resolves.toBeUndefined();
+      await expect(
+        accessService.resolveSiteAccess(user.id, true, secondSite.id),
+      ).resolves.toMatchObject({ isSystemAdmin: true, siteId: secondSite.id });
+      await expect(
+        prisma.siteRoleAssignment.create({
+          data: {
+            roleKey: "editor",
+            siteId: firstSite.id,
+            userId: user.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+
+      await prisma.site.delete({ where: { id: firstSite.id } });
+      await expect(
+        prisma.siteRoleAssignment.findUnique({ where: { id: assignment.id } }),
+      ).resolves.toBeNull();
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
   it("allows only one concurrent initial administrator with one audit event", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
 
@@ -214,11 +285,23 @@ describe("Prisma baseline migration", () => {
         passwordHash: await hashPassword(password),
       },
     });
+    const allowedSite = await prisma.site.create({
+      data: { key: "session-allowed", name: "Session Allowed" },
+    });
+    const deniedSite = await prisma.site.create({
+      data: { key: "session-denied", name: "Session Denied" },
+    });
+    await prisma.siteRoleAssignment.create({
+      data: { roleKey: "viewer", siteId: allowedSite.id, userId: user.id },
+    });
     const moduleRef = await Test.createTestingModule({
-      controllers: [IdentityController],
+      controllers: [IdentityController, SiteAccessController],
       providers: [
         IdentityService,
+        Reflector,
         SessionAuthenticationGuard,
+        SiteAccessService,
+        SiteAuthorizationGuard,
         { provide: PRISMA_CLIENT, useValue: prisma },
         {
           provide: IDENTITY_CONFIGURATION,
@@ -289,6 +372,21 @@ describe("Prisma baseline migration", () => {
         .get("/auth/session")
         .set("Cookie", sessionCookie ?? "")
         .expect(401);
+
+      const allowedAccess = await request(app.getHttpServer())
+        .get(`/sites/${allowedSite.id}/access`)
+        .set("Cookie", rotatedCookie ?? "")
+        .expect(200);
+      expect(allowedAccess.body).toEqual({
+        isSystemAdmin: false,
+        permissionKeys: ["content.read", "media.read", "site.read"],
+        roleKeys: ["viewer"],
+        siteId: allowedSite.id,
+      });
+      await request(app.getHttpServer())
+        .get(`/sites/${deniedSite.id}/access`)
+        .set("Cookie", rotatedCookie ?? "")
+        .expect(403);
 
       await request(app.getHttpServer())
         .post("/auth/logout")
