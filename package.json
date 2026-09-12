@@ -25,6 +25,7 @@
     "smoke": "node scripts/smoke.mjs",
     "teardown": "node scripts/teardown.mjs",
     "test": "nx run-many -t test",
+    "test:coverage": "pnpm --filter @nexora/core-api test:coverage && pnpm --filter @nexora/notification-api test:coverage",
     "typecheck": "nx run-many -t typecheck"
   },
   "dependencies": {
@@ -55,6 +56,7 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@types/supertest": "7.2.1",
+    "@vitest/coverage-v8": "4.0.15",
     "eslint": "9.39.1",
     "nx": "22.1.1",
     "prettier": "3.7.4",
