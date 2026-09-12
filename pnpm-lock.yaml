@@ -162,6 +162,9 @@ importers:
       "@nexora/config":
         specifier: workspace:*
         version: link:../../packages/config
+      argon2:
+        specifier: 0.45.1
+        version: 0.45.1
 
   services/notification-api: {}
 
@@ -1120,6 +1123,12 @@ packages:
     resolution:
       {
         integrity: sha512-ELEBe8PsLvvJ6QMr0zLt8ffvOHW/dc1m3CEzNMg7aJUv3bMaoDtw2TXyDAwkYBuroxxuHEwhRTLJSe5sya547g==,
+      }
+
+  "@epic-web/invariant@1.0.0":
+    resolution:
+      {
+        integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==,
       }
 
   "@esbuild/aix-ppc64@0.27.7":
@@ -2434,6 +2443,13 @@ packages:
       {
         integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==,
       }
+
+  "@phc/format@1.0.0":
+    resolution:
+      {
+        integrity: sha512-m7X9U6BG2+J+R1lSOdCiITLLrxm+cWlNI3HUFA92oLO77ObGNzaKdh8pMLqdZcshtkKuV84olNNXDfMc4FezBQ==,
+      }
+    engines: { node: ">=10" }
 
   "@pinojs/redact@0.4.0":
     resolution:
@@ -3897,6 +3913,13 @@ packages:
       }
     engines: { node: ">= 14" }
 
+  argon2@0.45.1:
+    resolution:
+      {
+        integrity: sha512-skm+/WCjkGqCQxF7FG1LuZXM5yvbFjgbfiCGsud2oLgaDhh6b6dbH0b1EkghbM+xx4Bj8Ape+KKgixoIlWZicQ==,
+      }
+    engines: { node: ">=16.17.0" }
+
   argparse@1.0.10:
     resolution:
       {
@@ -4750,6 +4773,14 @@ packages:
       {
         integrity: sha512-MJG9liiZ+ogc4TzUwuvbER1JRdgvUFSB5+VR/g5h82fGaIRWMWddtKBHi7/sVhfjQZ6SehlyhvQYrcYkaUIpLg==,
       }
+
+  cross-env@10.1.0:
+    resolution:
+      {
+        integrity: sha512-GsYosgnACZTADcmEyJctkJIoqAhHjttw7RsFrVoJNXbsWWqaq6Ym+7kZjq6mS45O0jij6vtiReppKQEtqWy6Dw==,
+      }
+    engines: { node: ">=20" }
+    hasBin: true
 
   cross-spawn@7.0.6:
     resolution:
@@ -7063,6 +7094,13 @@ packages:
       {
         integrity: sha512-AGK2yQKIjRuqnc6VkX2Xj5d+QW8xZ87pa1UK6yA6ouUyuxfHuMP6umE5QK7UmTeOAymo+Zx1Fxiuw9rVx8taHQ==,
       }
+
+  node-addon-api@8.9.2:
+    resolution:
+      {
+        integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==,
+      }
+    engines: { node: ^18 || ^20 || >= 21 }
 
   node-gyp-build@4.8.4:
     resolution:
@@ -10203,6 +10241,8 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  "@epic-web/invariant@1.0.0": {}
+
   "@esbuild/aix-ppc64@0.27.7":
     optional: true
 
@@ -10787,6 +10827,8 @@ snapshots:
   "@paralleldrive/cuid2@2.3.1":
     dependencies:
       "@noble/hashes": 1.8.0
+
+  "@phc/format@1.0.0": {}
 
   "@pinojs/redact@0.4.0": {}
 
@@ -11885,6 +11927,13 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
+  argon2@0.45.1:
+    dependencies:
+      "@phc/format": 1.0.0
+      cross-env: 10.1.0
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
   argparse@1.0.10:
     dependencies:
       sprintf-js: 1.0.3
@@ -12395,6 +12444,11 @@ snapshots:
       ripemd160: 2.0.3
       safe-buffer: 5.2.1
       sha.js: 2.4.12
+
+  cross-env@10.1.0:
+    dependencies:
+      "@epic-web/invariant": 1.0.0
+      cross-spawn: 7.0.6
 
   cross-spawn@7.0.6:
     dependencies:
@@ -13750,6 +13804,8 @@ snapshots:
       tslib: 2.8.1
 
   node-abort-controller@3.1.1: {}
+
+  node-addon-api@8.9.2: {}
 
   node-gyp-build@4.8.4: {}
 
