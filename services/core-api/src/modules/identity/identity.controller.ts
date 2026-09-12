@@ -8,9 +8,11 @@ import {
   HttpCode,
   Inject,
   Post,
+  Req,
   Res,
   UnauthorizedException,
   UnsupportedMediaTypeException,
+  UseGuards,
 } from "@nestjs/common";
 import { InjectIdentityConfiguration, type IdentityConfiguration } from "./identity.config.js";
 import {
@@ -25,6 +27,10 @@ import {
   sessionCookieName,
   sessionCookieOptions,
 } from "./session-security.js";
+import {
+  type AuthenticatedRequest,
+  SessionAuthenticationGuard,
+} from "./session-authentication.guard.js";
 
 type CookieResponse = {
   clearCookie: (name: string, options: ReturnType<typeof sessionCookieClearOptions>) => void;
@@ -94,16 +100,17 @@ export class IdentityController {
 
   @Get("session")
   @Header("Cache-Control", "no-store")
-  async currentSession(@Headers("cookie") cookieHeader: string | undefined) {
-    try {
-      return await this.identity.currentSession(readSessionCookie(cookieHeader));
-    } catch (error) {
-      if (error instanceof AuthenticationFailedError) {
-        throw new UnauthorizedException("Authentication required.");
-      }
-
-      throw error;
+  @UseGuards(SessionAuthenticationGuard)
+  currentSession(@Req() request: AuthenticatedRequest) {
+    if (!request.identity) {
+      throw new UnauthorizedException("Authentication required.");
     }
+
+    return {
+      csrfToken: request.identity.csrfToken,
+      expiresAt: request.identity.expiresAt,
+      user: request.identity.user,
+    };
   }
 
   @Post("logout")
