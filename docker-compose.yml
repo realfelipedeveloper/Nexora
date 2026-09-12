@@ -46,6 +46,7 @@ services:
       args:
         NEXORA_TARGET: "@nexora/core-api"
     environment:
+      NODE_ENV: production
       CORE_API_PORT: 48120
       DATABASE_URL: postgresql://nexora:nexora_dev_password@postgres:5432/nexora?schema=public
       REDIS_URL: redis://redis:6379
