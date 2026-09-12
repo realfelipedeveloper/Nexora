@@ -22,6 +22,7 @@ tmp/
 
 # Local SDD, docs, agents, and skills must never be pushed.
 nexora-sdd-engineering-loop/
+nexora-sdd-engineering-loop-v2/
 docs/
 **/docs/
 sdd/
