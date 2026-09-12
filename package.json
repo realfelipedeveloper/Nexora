@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "lint": "nx run-many -t lint",
     "playwright": "playwright test",
+    "performance:health": "node scripts/performance-health.mjs",
     "prisma:generate": "pnpm --filter @nexora/core-api prisma:generate",
     "prisma:migrate": "pnpm --filter @nexora/core-api prisma:migrate",
     "sbom": "pnpm sbom --sbom-format cyclonedx --prod --lockfile-only --out tmp/sbom/nexora.cdx.json",
