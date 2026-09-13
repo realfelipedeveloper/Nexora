@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { globalConfigurationSchemas, siteConfigurationSchemas } from "./index.js";
+import {
+  globalConfigurationSchemas,
+  siteConfigurationSchemas,
+  siteCreateSchema,
+  siteStatusUpdateSchema,
+} from "./index.js";
 
 describe("configuration schemas", () => {
   it("normalizes registered global branding values", () => {
@@ -26,6 +31,33 @@ describe("configuration schemas", () => {
     expect(identity.safeParse({ displayName: "" }).success).toBe(false);
     expect(identity.safeParse({ displayName: "a".repeat(121) }).success).toBe(false);
     expect(identity.safeParse({ displayName: "Nexora", password: "do-not-store" }).success).toBe(
+      false,
+    );
+  });
+
+  it("normalizes valid site lifecycle commands", () => {
+    expect(siteCreateSchema.parse({ key: "main-site", name: "  Main Site  " })).toEqual({
+      key: "main-site",
+      name: "Main Site",
+    });
+    expect(siteStatusUpdateSchema.parse({ status: "ARCHIVED" })).toEqual({
+      status: "ARCHIVED",
+    });
+  });
+
+  it.each([
+    { key: "Main-Site", name: "Main Site" },
+    { key: "main_site", name: "Main Site" },
+    { key: "main-site", name: "" },
+    { key: "main-site", name: "a".repeat(121) },
+    { key: "main-site", name: "Main Site", token: "not-configuration" },
+  ])("rejects invalid site creation input", (input) => {
+    expect(siteCreateSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("rejects unsupported lifecycle states and extra properties", () => {
+    expect(siteStatusUpdateSchema.safeParse({ status: "DELETED" }).success).toBe(false);
+    expect(siteStatusUpdateSchema.safeParse({ reason: "secret", status: "ACTIVE" }).success).toBe(
       false,
     );
   });
