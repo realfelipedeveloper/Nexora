@@ -27,6 +27,7 @@ services:
       args:
         NEXORA_TARGET: "@nexora/cms"
     environment:
+      CORE_API_INTERNAL_URL: http://core-api:48120
       NODE_ENV: production
     ports:
       - "${CMS_PORT:-48111}:48111"
