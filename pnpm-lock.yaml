@@ -156,7 +156,11 @@ importers:
         specifier: ">=19"
         version: 19.2.1
 
-  packages/schemas: {}
+  packages/schemas:
+    dependencies:
+      zod:
+        specifier: 4.1.13
+        version: 4.1.13
 
   packages/testing: {}
 
@@ -165,6 +169,9 @@ importers:
       "@nexora/config":
         specifier: workspace:*
         version: link:../../packages/config
+      "@nexora/schemas":
+        specifier: workspace:*
+        version: link:../../packages/schemas
       "@prisma/adapter-pg":
         specifier: 7.10.0
         version: 7.10.0
