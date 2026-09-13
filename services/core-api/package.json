@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@nexora/config": "workspace:*",
+    "@nexora/schemas": "workspace:*",
     "@prisma/adapter-pg": "7.10.0",
     "argon2": "0.45.1",
     "pg": "8.23.0"

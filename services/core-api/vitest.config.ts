@@ -7,12 +7,16 @@ export default defineConfig({
       "@nexora/config": fileURLToPath(
         new URL("../../packages/config/src/index.ts", import.meta.url),
       ),
+      "@nexora/schemas": fileURLToPath(
+        new URL("../../packages/schemas/src/index.ts", import.meta.url),
+      ),
     },
   },
   test: {
     environment: "node",
     exclude: ["dist/**"],
     globals: true,
+    include: ["src/**/*.spec.ts"],
     coverage: {
       exclude: ["src/**/*.spec.ts", "src/cli/provision-admin.ts"],
       include: ["src/**/*.ts"],
