@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Test } from "@nestjs/testing";
-import type { INestApplication } from "@nestjs/common";
+import type { INestApplication, LoggerService } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,6 +28,34 @@ import { SiteAuthorizationGuard } from "./identity/site-authorization.guard.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+
+class CapturedLogger implements LoggerService {
+  readonly entries: unknown[] = [];
+
+  debug(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+
+  error(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+
+  fatal(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+
+  log(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+
+  verbose(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+
+  warn(...messages: unknown[]) {
+    this.entries.push(...messages);
+  }
+}
 
 describe("Prisma baseline migration", () => {
   let postgres: StartedPostgreSqlContainer;
@@ -340,6 +368,7 @@ describe("Prisma baseline migration", () => {
       expect(setCookies[0]).toContain("Path=/");
       expect(setCookies[0]).toContain("Secure");
       expect(login.body).not.toHaveProperty("sessionToken");
+      expect(JSON.stringify(login.body)).not.toContain(password);
 
       const rawSessionToken = sessionCookie?.slice(sessionCookieName.length + 1) ?? "";
       const storedSession = await prisma.session.findUniqueOrThrow({
@@ -391,6 +420,10 @@ describe("Prisma baseline migration", () => {
       await request(app.getHttpServer())
         .post("/auth/logout")
         .set("Cookie", rotatedCookie ?? "")
+        .expect(403);
+      await request(app.getHttpServer())
+        .post("/auth/logout")
+        .set("Cookie", rotatedCookie ?? "")
         .set("x-csrf-token", "b".repeat(43))
         .expect(403);
       await expect(
@@ -422,6 +455,108 @@ describe("Prisma baseline migration", () => {
           },
         }),
       ).resolves.toBe(3);
+    } finally {
+      await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("rate limits authentication abuse without enumerating users or leaking secrets", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const email = "abuse.target@example.com";
+    const password = "correct abuse test password";
+    const passwordHash = await hashPassword(password);
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Abuse Target",
+        email,
+        normalizedEmail: email,
+        passwordHash,
+      },
+    });
+    const moduleRef = await Test.createTestingModule({
+      controllers: [IdentityController],
+      providers: [
+        IdentityService,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+        {
+          provide: IDENTITY_CONFIGURATION,
+          useValue: {
+            secureCookies: true,
+            sessionRotationIntervalMs: 15 * 60 * 1_000,
+            sessionTtlMs: 8 * 60 * 60 * 1_000,
+          },
+        },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    const logger = new CapturedLogger();
+    app.useLogger(logger);
+    configureHttpSecurity(app, {
+      loginRateLimitMaxRequests: 3,
+      loginRateLimitWindowMs: 60_000,
+      rateLimitMaxRequests: 100,
+    });
+    await app.init();
+
+    try {
+      const unknownPassword = "unknown account password";
+      const wrongPassword = "incorrect known account password";
+      const unknownUser = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: "unknown.abuse@example.com", password: unknownPassword })
+        .expect(401);
+      const knownUser = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email, password: wrongPassword })
+        .expect(401);
+      const malformedIdentity = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: "not-an-email", password })
+        .expect(401);
+      const limited = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email, password })
+        .expect(429);
+      const registration = await request(app.getHttpServer())
+        .post("/auth/register")
+        .send({ email, password })
+        .expect(404);
+
+      expect(knownUser.body).toEqual(unknownUser.body);
+      expect(malformedIdentity.body).toEqual(unknownUser.body);
+      expect(unknownUser.headers["set-cookie"]).toBeUndefined();
+      expect(knownUser.headers["set-cookie"]).toBeUndefined();
+      expect(limited.headers["set-cookie"]).toBeUndefined();
+      expect(unknownUser.headers["cache-control"]).toBe("no-store");
+      expect(limited.headers["cache-control"]).toBe("no-store");
+      expect(registration.headers["cache-control"]).toBe("no-store");
+      expect(limited.body).toEqual({
+        error: "Too Many Requests",
+        message: "Too many login attempts.",
+        statusCode: 429,
+      });
+      expect(registration.body).toMatchObject({ statusCode: 404 });
+      await expect(prisma.session.count({ where: { userId: user.id } })).resolves.toBe(0);
+      await expect(
+        prisma.auditEvent.count({
+          where: { action: "identity.session.created", actorId: user.id },
+        }),
+      ).resolves.toBe(0);
+
+      const observableOutput = JSON.stringify({
+        logs: logger.entries,
+        responses: [
+          unknownUser.body,
+          knownUser.body,
+          malformedIdentity.body,
+          limited.body,
+          registration.body,
+        ],
+      });
+      for (const secret of [email, password, passwordHash, unknownPassword, wrongPassword]) {
+        expect(observableOutput).not.toContain(secret);
+      }
     } finally {
       await app.close();
       await prisma.$disconnect();
