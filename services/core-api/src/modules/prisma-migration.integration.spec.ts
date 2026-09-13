@@ -57,7 +57,7 @@ class CapturedLogger implements LoggerService {
   }
 }
 
-describe("Prisma baseline migration", () => {
+describe("PostgreSQL migrations and integration", () => {
   let postgres: StartedPostgreSqlContainer;
 
   beforeAll(async () => {
@@ -108,6 +108,7 @@ describe("Prisma baseline migration", () => {
         "AuditEvent",
         "ContentType",
         "FieldDefinition",
+        "GlobalSetting",
         "Locale",
         "Permission",
         "Role",
@@ -115,6 +116,7 @@ describe("Prisma baseline migration", () => {
         "Session",
         "Site",
         "SiteRoleAssignment",
+        "SiteSetting",
         "User",
         "_prisma_migrations",
       ]),
@@ -203,6 +205,83 @@ describe("Prisma baseline migration", () => {
 
     expect(cascadeDelete.exitCode).toBe(0);
     expect(cascadeDelete.output.split(/\s+/).filter(Boolean).at(-1)).toBe("0");
+  }, 120_000);
+
+  it("enforces site lifecycle and configuration persistence invariants", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const site = await prisma.site.create({
+        data: { key: "configuration-site", name: "Configuration Site" },
+      });
+      expect(site.status).toBe("ACTIVE");
+
+      await prisma.locale.create({
+        data: { code: "en-US", isDefault: true, siteId: site.id },
+      });
+      await expect(
+        prisma.locale.create({
+          data: { code: "pt-BR", isDefault: true, siteId: site.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+
+      await prisma.globalSetting.create({
+        data: {
+          key: "platform.branding",
+          value: { productName: "Nexora" },
+        },
+      });
+      await prisma.siteSetting.create({
+        data: {
+          key: "site.identity",
+          siteId: site.id,
+          value: { displayName: "Configuration Site" },
+        },
+      });
+
+      await expect(
+        prisma.site.create({ data: { key: "Invalid Site Key", name: "Invalid" } }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.globalSetting.create({
+          data: { key: "Invalid Setting Key", value: {} },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.siteSetting.create({
+          data: {
+            key: "site.scalar",
+            siteId: site.id,
+            value: "not-an-object",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.siteSetting.create({
+          data: { key: "site.invalidversion", siteId: site.id, value: {}, version: 0 },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+
+      await prisma.site.update({
+        data: { status: "ARCHIVED" },
+        where: { id: site.id },
+      });
+      await expect(
+        prisma.site.findUniqueOrThrow({ where: { id: site.id } }),
+      ).resolves.toMatchObject({ status: "ARCHIVED" });
+
+      await prisma.site.delete({ where: { id: site.id } });
+      await expect(
+        prisma.siteSetting.findUnique({
+          where: { siteId_key: { key: "site.identity", siteId: site.id } },
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        prisma.globalSetting.findUnique({ where: { key: "platform.branding" } }),
+      ).resolves.toMatchObject({ version: 1 });
+    } finally {
+      await prisma.$disconnect();
+    }
   }, 120_000);
 
   it("enforces seeded roles and isolates editorial access by site", async () => {
