@@ -15,6 +15,7 @@ import {
   AdminAlreadyProvisionedError,
   provisionInitialAdmin,
 } from "./identity/admin-provisioning.js";
+import { SessionCsrfGuard, SystemAdministratorGuard } from "./identity/administrative-guards.js";
 import { hashPassword } from "./identity/credentials.js";
 import { IDENTITY_CONFIGURATION } from "./identity/identity.config.js";
 import { IdentityController } from "./identity/identity.controller.js";
@@ -25,6 +26,8 @@ import { hashSessionToken } from "./identity/session-token.js";
 import { SiteAccessController } from "./identity/site-access.controller.js";
 import { SiteAccessService } from "./identity/site-access.service.js";
 import { SiteAuthorizationGuard } from "./identity/site-authorization.guard.js";
+import { SiteLifecycleService } from "./sites/site-lifecycle.service.js";
+import { SitesController } from "./sites/sites.controller.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -534,6 +537,160 @@ describe("PostgreSQL migrations and integration", () => {
           },
         }),
       ).resolves.toBe(3);
+    } finally {
+      await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("authorizes and audits the site lifecycle API", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const password = "site lifecycle integration password";
+    const existingAdmin = await prisma.user.findFirstOrThrow({ where: { isSystemAdmin: true } });
+    const admin = await prisma.user.update({
+      data: {
+        displayName: "Lifecycle Admin",
+        email: "lifecycle.admin@example.com",
+        normalizedEmail: "lifecycle.admin@example.com",
+        passwordHash: await hashPassword(password),
+      },
+      where: { id: existingAdmin.id },
+    });
+    const editor = await prisma.user.create({
+      data: {
+        displayName: "Lifecycle Editor",
+        email: "lifecycle.editor@example.com",
+        normalizedEmail: "lifecycle.editor@example.com",
+        passwordHash: await hashPassword(password),
+      },
+    });
+    const moduleRef = await Test.createTestingModule({
+      controllers: [IdentityController, SitesController],
+      providers: [
+        IdentityService,
+        Reflector,
+        SessionAuthenticationGuard,
+        SessionCsrfGuard,
+        SiteAccessService,
+        SiteAuthorizationGuard,
+        SiteLifecycleService,
+        SystemAdministratorGuard,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+        {
+          provide: IDENTITY_CONFIGURATION,
+          useValue: {
+            secureCookies: true,
+            sessionRotationIntervalMs: 15 * 60 * 1_000,
+            sessionTtlMs: 8 * 60 * 60 * 1_000,
+          },
+        },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    configureHttpSecurity(app);
+    await app.init();
+
+    const loginAs = async (email: string) => {
+      const login = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email, password })
+        .expect(200);
+      const cookies = login.headers["set-cookie"] as unknown as string[];
+      return {
+        cookie: cookies[0]?.split(";", 1)[0] ?? "",
+        csrfToken: login.body.csrfToken as string,
+      };
+    };
+
+    try {
+      const adminSession = await loginAs(admin.email);
+      await request(app.getHttpServer())
+        .post("/sites")
+        .set("Cookie", adminSession.cookie)
+        .send({ key: "lifecycle-site", name: "Lifecycle Site" })
+        .expect(403);
+
+      const created = await request(app.getHttpServer())
+        .post("/sites")
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .send({ key: "lifecycle-site", name: "  Lifecycle Site  " })
+        .expect(201);
+      expect(created.headers["cache-control"]).toBe("no-store");
+      expect(created.body).toMatchObject({
+        key: "lifecycle-site",
+        name: "Lifecycle Site",
+        status: "ACTIVE",
+      });
+
+      await request(app.getHttpServer())
+        .post("/sites")
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .send({ key: "lifecycle-site", name: "Duplicate" })
+        .expect(409);
+
+      const editorSession = await loginAs(editor.email);
+      await request(app.getHttpServer())
+        .post("/sites")
+        .set("Cookie", editorSession.cookie)
+        .set("x-csrf-token", editorSession.csrfToken)
+        .send({ key: "forbidden-site", name: "Forbidden" })
+        .expect(403);
+      await request(app.getHttpServer())
+        .get(`/sites/${created.body.id as string}`)
+        .set("Cookie", editorSession.cookie)
+        .expect(403);
+
+      await prisma.siteRoleAssignment.create({
+        data: { roleKey: "viewer", siteId: created.body.id as string, userId: editor.id },
+      });
+      const editorSites = await request(app.getHttpServer())
+        .get("/sites")
+        .set("Cookie", editorSession.cookie)
+        .expect(200);
+      expect(editorSites.body).toEqual([
+        expect.objectContaining({ id: created.body.id, key: "lifecycle-site" }),
+      ]);
+      await request(app.getHttpServer())
+        .get(`/sites/${created.body.id as string}`)
+        .set("Cookie", editorSession.cookie)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/sites/${created.body.id as string}/status`)
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .send({ key: "replacement-key", status: "ARCHIVED" })
+        .expect(400);
+      const archived = await request(app.getHttpServer())
+        .patch(`/sites/${created.body.id as string}/status`)
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .send({ status: "ARCHIVED" })
+        .expect(200);
+      expect(archived.body).toMatchObject({ key: "lifecycle-site", status: "ARCHIVED" });
+
+      await expect(
+        prisma.auditEvent.findMany({
+          orderBy: { createdAt: "asc" },
+          select: { action: true, actorId: true, entityId: true, metadata: true },
+          where: { actorId: admin.id, entityId: created.body.id as string },
+        }),
+      ).resolves.toEqual([
+        {
+          action: "site.created",
+          actorId: admin.id,
+          entityId: created.body.id,
+          metadata: { key: "lifecycle-site", status: "ACTIVE" },
+        },
+        {
+          action: "site.status.changed",
+          actorId: admin.id,
+          entityId: created.body.id,
+          metadata: { from: "ACTIVE", to: "ARCHIVED" },
+        },
+      ]);
     } finally {
       await app.close();
       await prisma.$disconnect();

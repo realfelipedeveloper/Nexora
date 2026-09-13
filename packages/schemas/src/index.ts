@@ -28,6 +28,26 @@ export type SiteConfigurationValues = {
   [Key in SiteConfigurationKey]: z.infer<(typeof siteConfigurationSchemas)[Key]>;
 };
 
+export const siteCreateSchema = z.strictObject({
+  key: z
+    .string()
+    .trim()
+    .min(1)
+    .max(63)
+    .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u),
+  name: z.string().trim().min(1).max(120),
+});
+
+export const siteStatusSchema = z.enum(["ACTIVE", "ARCHIVED"]);
+
+export const siteStatusUpdateSchema = z.strictObject({
+  status: siteStatusSchema,
+});
+
+export type SiteCreateInput = z.infer<typeof siteCreateSchema>;
+export type SiteStatus = z.infer<typeof siteStatusSchema>;
+export type SiteStatusUpdateInput = z.infer<typeof siteStatusUpdateSchema>;
+
 export const initialFieldTypes = [
   "text",
   "textarea",
