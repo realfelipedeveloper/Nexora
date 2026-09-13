@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@nexora/schemas": "workspace:*"
+    "@nexora/schemas": "workspace:*",
+    "lucide-react": "1.45.0"
   },
   "scripts": {
     "build": "next build",
