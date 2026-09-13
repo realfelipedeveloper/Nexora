@@ -26,6 +26,12 @@ import { hashSessionToken } from "./identity/session-token.js";
 import { SiteAccessController } from "./identity/site-access.controller.js";
 import { SiteAccessService } from "./identity/site-access.service.js";
 import { SiteAuthorizationGuard } from "./identity/site-authorization.guard.js";
+import { ConfigurationRegistry } from "./sites/configuration-registry.js";
+import {
+  GlobalSettingsController,
+  SiteSettingsController,
+} from "./sites/configuration-settings.controller.js";
+import { ConfigurationSettingsService } from "./sites/configuration-settings.service.js";
 import { SiteLifecycleService } from "./sites/site-lifecycle.service.js";
 import { SitesController } from "./sites/sites.controller.js";
 
@@ -691,6 +697,176 @@ describe("PostgreSQL migrations and integration", () => {
           metadata: { from: "ACTIVE", to: "ARCHIVED" },
         },
       ]);
+    } finally {
+      await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("enforces optimistic concurrency and scope authorization for settings", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const password = "settings integration password";
+    const existingAdmin = await prisma.user.findFirstOrThrow({ where: { isSystemAdmin: true } });
+    const admin = await prisma.user.update({
+      data: { passwordHash: await hashPassword(password) },
+      where: { id: existingAdmin.id },
+    });
+    const site = await prisma.site.findUniqueOrThrow({ where: { key: "lifecycle-site" } });
+    const siteAdmin = await prisma.user.create({
+      data: {
+        displayName: "Settings Site Admin",
+        email: "settings.site.admin@example.com",
+        normalizedEmail: "settings.site.admin@example.com",
+        passwordHash: await hashPassword(password),
+      },
+    });
+    await prisma.siteRoleAssignment.create({
+      data: { roleKey: "site-admin", siteId: site.id, userId: siteAdmin.id },
+    });
+    const moduleRef = await Test.createTestingModule({
+      controllers: [GlobalSettingsController, IdentityController, SiteSettingsController],
+      providers: [
+        ConfigurationRegistry,
+        ConfigurationSettingsService,
+        IdentityService,
+        Reflector,
+        SessionAuthenticationGuard,
+        SessionCsrfGuard,
+        SiteAccessService,
+        SiteAuthorizationGuard,
+        SystemAdministratorGuard,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+        {
+          provide: IDENTITY_CONFIGURATION,
+          useValue: {
+            secureCookies: true,
+            sessionRotationIntervalMs: 15 * 60 * 1_000,
+            sessionTtlMs: 8 * 60 * 60 * 1_000,
+          },
+        },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    configureHttpSecurity(app);
+    await app.init();
+
+    const loginAs = async (email: string) => {
+      const login = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email, password })
+        .expect(200);
+      const cookies = login.headers["set-cookie"] as unknown as string[];
+      return {
+        cookie: cookies[0]?.split(";", 1)[0] ?? "",
+        csrfToken: login.body.csrfToken as string,
+      };
+    };
+
+    try {
+      const adminSession = await loginAs(admin.email);
+      const currentGlobal = await request(app.getHttpServer())
+        .get("/settings/global/platform.branding")
+        .set("Cookie", adminSession.cookie)
+        .expect(200);
+      expect(currentGlobal.headers.etag).toBe('"1"');
+      expect(currentGlobal.headers["cache-control"]).toBe("no-store");
+
+      await request(app.getHttpServer())
+        .put("/settings/global/platform.branding")
+        .set("Cookie", adminSession.cookie)
+        .set("If-Match", '"1"')
+        .send({ productName: "Nexora One" })
+        .expect(403);
+      await request(app.getHttpServer())
+        .put("/settings/global/platform.branding")
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .set("If-Match", '"99"')
+        .send({ productName: "Stale" })
+        .expect(412);
+
+      const updatedGlobal = await request(app.getHttpServer())
+        .put("/settings/global/platform.branding")
+        .set("Cookie", adminSession.cookie)
+        .set("x-csrf-token", adminSession.csrfToken)
+        .set("If-Match", '"1"')
+        .send({ productName: "  Nexora Updated  " })
+        .expect(200);
+      expect(updatedGlobal.headers.etag).toBe('"2"');
+      expect(updatedGlobal.body).toMatchObject({
+        value: { productName: "Nexora Updated" },
+        version: 2,
+      });
+
+      const concurrent = await Promise.all([
+        request(app.getHttpServer())
+          .put("/settings/global/platform.branding")
+          .set("Cookie", adminSession.cookie)
+          .set("x-csrf-token", adminSession.csrfToken)
+          .set("If-Match", '"2"')
+          .send({ productName: "Concurrent A" }),
+        request(app.getHttpServer())
+          .put("/settings/global/platform.branding")
+          .set("Cookie", adminSession.cookie)
+          .set("x-csrf-token", adminSession.csrfToken)
+          .set("If-Match", '"2"')
+          .send({ productName: "Concurrent B" }),
+      ]);
+      expect(concurrent.map((response) => response.status).sort()).toEqual([200, 412]);
+      await expect(
+        prisma.globalSetting.findUniqueOrThrow({ where: { key: "platform.branding" } }),
+      ).resolves.toMatchObject({ version: 3 });
+
+      const siteAdminSession = await loginAs(siteAdmin.email);
+      await request(app.getHttpServer())
+        .get("/settings/global")
+        .set("Cookie", siteAdminSession.cookie)
+        .expect(403);
+      await request(app.getHttpServer())
+        .get(`/sites/${site.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .expect(404);
+      await request(app.getHttpServer())
+        .put(`/sites/${site.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .set("x-csrf-token", siteAdminSession.csrfToken)
+        .set("If-None-Match", "*")
+        .send({ displayName: "  Lifecycle Settings  " })
+        .expect(200)
+        .expect("ETag", '"1"');
+      await request(app.getHttpServer())
+        .put(`/sites/${site.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .set("x-csrf-token", siteAdminSession.csrfToken)
+        .set("If-None-Match", "*")
+        .send({ displayName: "Duplicate" })
+        .expect(412);
+
+      const sensitiveValue = "NeverPersistInAudit";
+      const invalid = await request(app.getHttpServer())
+        .put(`/sites/${site.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .set("x-csrf-token", siteAdminSession.csrfToken)
+        .set("If-Match", '"1"')
+        .send({ displayName: "Lifecycle Settings", token: sensitiveValue })
+        .expect(400);
+      expect(JSON.stringify(invalid.body)).not.toContain(sensitiveValue);
+
+      const auditEvents = await prisma.auditEvent.findMany({
+        select: { action: true, metadata: true },
+        where: {
+          action: { in: ["configuration.global.written", "configuration.site.written"] },
+        },
+      });
+      expect(
+        auditEvents.filter((event) => event.action === "configuration.global.written"),
+      ).toHaveLength(2);
+      expect(
+        auditEvents.filter((event) => event.action === "configuration.site.written"),
+      ).toHaveLength(1);
+      expect(JSON.stringify(auditEvents)).not.toContain("Nexora Updated");
+      expect(JSON.stringify(auditEvents)).not.toContain("Lifecycle Settings");
+      expect(JSON.stringify(auditEvents)).not.toContain(sensitiveValue);
     } finally {
       await app.close();
       await prisma.$disconnect();
