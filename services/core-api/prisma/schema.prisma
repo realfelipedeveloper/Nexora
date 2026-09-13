@@ -23,7 +23,9 @@ model User {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  sessions Session[]
+  sessions            Session[]
+  siteRoleAssignments SiteRoleAssignment[] @relation("SiteRoleUser")
+  siteRoleGrants      SiteRoleAssignment[] @relation("SiteRoleGrantedBy")
 }
 
 model Session {
@@ -48,8 +50,55 @@ model Site {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  locales      Locale[]
-  contentTypes ContentType[]
+  locales         Locale[]
+  contentTypes    ContentType[]
+  roleAssignments SiteRoleAssignment[]
+}
+
+model Permission {
+  key         String @id
+  description String
+
+  rolePermissions RolePermission[]
+}
+
+model Role {
+  key         String @id
+  name        String
+  description String
+
+  permissions     RolePermission[]
+  siteAssignments SiteRoleAssignment[]
+}
+
+model RolePermission {
+  roleKey       String
+  permissionKey String
+
+  role       Role       @relation(fields: [roleKey], references: [key], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleKey, permissionKey])
+  @@index([permissionKey])
+}
+
+model SiteRoleAssignment {
+  id          String   @id @default(uuid())
+  siteId      String
+  userId      String
+  roleKey     String
+  grantedById String?
+  createdAt   DateTime @default(now())
+
+  site      Site  @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  user      User  @relation("SiteRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      Role  @relation(fields: [roleKey], references: [key], onDelete: Restrict)
+  grantedBy User? @relation("SiteRoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([siteId, userId, roleKey])
+  @@index([userId, siteId])
+  @@index([siteId, roleKey])
+  @@index([grantedById])
 }
 
 model Locale {
