@@ -8,8 +8,8 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  background: #f6f8f4;
-  color: #1f2a28;
+  background: #eef2ef;
+  color: #202927;
 }
 
 * {
@@ -17,49 +17,487 @@
 }
 
 body {
+  min-width: 320px;
   margin: 0;
+  background: #eef2ef;
 }
 
-.workspace {
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+:focus-visible {
+  outline: 3px solid #d89036;
+  outline-offset: 2px;
+}
+
+.login-shell {
   min-height: 100vh;
-  padding: 32px;
-}
-
-header {
-  max-width: 880px;
-  margin: 0 auto 24px;
-}
-
-header p {
-  margin: 0 0 8px;
-  color: #6b5d20;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0;
-  font-size: clamp(2rem, 5vw, 3.5rem);
-  line-height: 1;
-}
-
-.grid {
-  width: min(880px, 100%);
-  margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-content: center;
+  justify-items: center;
+  gap: 28px;
+  padding: 32px 20px;
+}
+
+.login-brand,
+.sidebar-brand {
+  display: flex;
+  align-items: center;
   gap: 12px;
 }
 
-.tile {
-  min-height: 72px;
+.login-brand {
+  width: min(420px, 100%);
+}
+
+.login-brand h1,
+.login-brand p,
+.sidebar-brand strong,
+.sidebar-brand span {
+  margin: 0;
+}
+
+.login-brand h1 {
+  font-size: 1.5rem;
+  line-height: 1.1;
+}
+
+.login-brand p {
+  margin-top: 3px;
+  color: #64706d;
+  font-size: 0.875rem;
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
   display: grid;
   place-items: center;
-  border: 1px solid #d9dfd1;
+  border-radius: 8px;
+  background: #27624f;
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  padding: 28px;
+  border: 1px solid #d5dcd8;
   border-radius: 8px;
   background: #ffffff;
-  color: #33413d;
+  box-shadow: 0 18px 48px rgba(32, 52, 46, 0.1);
+}
+
+.login-heading,
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.login-heading > svg {
+  margin-top: 3px;
+  color: #27624f;
+}
+
+.login-heading h2,
+.section-heading h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.login-heading p,
+.section-heading p {
+  margin: 3px 0 0;
+  color: #626e6a;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+form {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+label {
+  margin-top: 8px;
+  color: #384440;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+input {
+  width: 100%;
+  height: 44px;
+  border: 1px solid #b8c3bf;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #202927;
+  padding: 0 12px;
+}
+
+input:hover {
+  border-color: #7f918b;
+}
+
+input:focus {
+  border-color: #27624f;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.icon-button {
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4d5b57;
+}
+
+.icon-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.icon-button:hover {
+  background: #e8eeeb;
+  color: #204f40;
+}
+
+.password-field .icon-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+.button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 16px;
   font-weight: 700;
+}
+
+.button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.button-primary {
+  background: #27624f;
+  color: #ffffff;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #1d4d3d;
+}
+
+.sign-in-button {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.form-alert,
+.workspace-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-left: 3px solid #b94b48;
+  background: #fff1ef;
+  color: #7f2726;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.form-alert {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+}
+
+.form-alert svg,
+.workspace-alert svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.auth-status {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.auth-status h1,
+.auth-status p {
+  margin: 0;
+}
+
+.auth-status p {
+  color: #5d6a66;
+}
+
+.cms-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  background: #f6f8f7;
+}
+
+.sidebar {
+  min-height: 100vh;
+  padding: 20px 16px;
+  border-right: 1px solid #d9dfdc;
+  background: #ffffff;
+}
+
+.sidebar-brand {
+  min-height: 44px;
+  margin-bottom: 28px;
+  padding: 0 4px;
+}
+
+.sidebar-brand .brand-mark {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+}
+
+.sidebar-brand div {
+  display: grid;
+}
+
+.sidebar-brand strong {
+  font-size: 0.95rem;
+}
+
+.sidebar-brand div span {
+  color: #65716d;
+  font-size: 0.75rem;
+}
+
+.nav-current {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 6px;
+  background: #e6f0eb;
+  color: #204f40;
+  padding: 0 12px;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.workspace {
+  min-width: 0;
+  padding: 24px 32px 48px;
+}
+
+.workspace-header {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #d9dfdc;
+}
+
+.workspace-header h1,
+.eyebrow {
+  margin: 0;
+}
+
+.workspace-header h1 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+}
+
+.eyebrow {
+  color: #687570;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.account-menu {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-copy {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+}
+
+.account-copy strong,
+.account-copy span {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy strong {
+  font-size: 0.875rem;
+}
+
+.account-copy span {
+  color: #687570;
+  font-size: 0.75rem;
+}
+
+.account-logout {
+  flex: 0 0 40px;
+  border: 1px solid #cfd7d3;
+  background: #ffffff;
+}
+
+.workspace-alert {
+  margin: 20px 0 0;
+  padding: 10px 12px;
+}
+
+.content-section {
+  padding-top: 32px;
+}
+
+.section-heading {
+  margin-bottom: 18px;
+}
+
+.section-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d3dbd7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #27624f;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.field-tile {
+  min-width: 0;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #d8dfdb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #394642;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 700px) {
+  .cms-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    min-height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 16px;
+    border-right: 0;
+    border-bottom: 1px solid #d9dfdc;
+  }
+
+  .sidebar-brand {
+    min-height: 40px;
+    margin: 0;
+  }
+
+  .sidebar nav {
+    display: none;
+  }
+
+  .workspace {
+    padding: 20px 16px 36px;
+  }
+
+  .workspace-header {
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .account-copy {
+    display: none;
+  }
+
+  .field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 400px) {
+  .login-panel {
+    padding: 22px 18px;
+  }
+
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation-duration: 1.6s;
+  }
 }
