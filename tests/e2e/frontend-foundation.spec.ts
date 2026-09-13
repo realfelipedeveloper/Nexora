@@ -17,7 +17,14 @@ const authenticatedSession = {
 
 test.describe("frontend foundation", () => {
   test("public app renders and passes accessibility checks", async ({ page }) => {
-    await page.goto(webUrl);
+    const identityRequests: string[] = [];
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (pathname.startsWith("/api/core") || pathname.startsWith("/auth")) {
+        identityRequests.push(pathname);
+      }
+    });
+    const publicResponse = await page.goto(webUrl);
 
     await expect(
       page.getByRole("heading", { name: "Universal content, site-ready delivery." }),
@@ -26,8 +33,19 @@ test.describe("frontend foundation", () => {
     await expect(page.getByText("domain-agnostic")).toBeVisible();
 
     const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
+    const publicDocument = await page.locator("html").textContent();
+    const browserStorage = await page.evaluate(() => ({
+      local: Object.keys(localStorage),
+      session: Object.keys(sessionStorage),
+    }));
 
     expect(accessibilityScanResults.violations).toEqual([]);
+    expect(publicResponse?.headers()["set-cookie"]).toBeUndefined();
+    expect(await page.context().cookies(webUrl)).toEqual([]);
+    expect(identityRequests).toEqual([]);
+    expect(publicDocument).not.toMatch(/[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}/u);
+    expect(publicDocument).not.toContain("nexora_session");
+    expect(browserStorage).toEqual({ local: [], session: [] });
   });
 
   test("cms login is keyboard accessible and keeps credential failures generic", async ({
@@ -88,6 +106,13 @@ test.describe("frontend foundation", () => {
     expect(loginUrl).not.toContain("admin@example.com");
     expect(loginUrl).not.toContain("correct%20horse");
     expect(authorizationHeader).toBeUndefined();
+    expect(await page.locator("html").textContent()).not.toContain(csrfToken);
+    expect(
+      await page.evaluate(() => ({
+        local: Object.keys(localStorage),
+        session: Object.keys(sessionStorage),
+      })),
+    ).toEqual({ local: [], session: [] });
   });
 
   test("cms restores an authenticated workspace and logs out with CSRF", async ({ page }) => {
