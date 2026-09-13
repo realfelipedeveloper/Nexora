@@ -11,6 +11,11 @@ enum UserStatus {
   DISABLED
 }
 
+enum SiteStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -44,15 +49,41 @@ model Session {
 }
 
 model Site {
-  id        String   @id @default(uuid())
-  key       String   @unique
+  id        String     @id @default(uuid())
+  key       String     @unique
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status    SiteStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
   locales         Locale[]
   contentTypes    ContentType[]
   roleAssignments SiteRoleAssignment[]
+  settings        SiteSetting[]
+
+  @@index([status])
+}
+
+model GlobalSetting {
+  key       String   @id
+  value     Json     @default("{}")
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SiteSetting {
+  siteId    String
+  key       String
+  value     Json     @default("{}")
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@id([siteId, key])
+  @@index([key])
 }
 
 model Permission {
