@@ -1,4 +1,4 @@
-name: Open Main PR
+name: Abrir PR para Main
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
           ref: develop
           fetch-depth: 0
 
-      - name: Generate promotion app token
+      - name: Gerar token do aplicativo de promoção
         id: promotion-token
         uses: actions/create-github-app-token@v3
         with:
@@ -26,7 +26,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: Nexora
 
-      - name: Open develop to main PR
+      - name: Abrir PR de develop para main
         env:
           GH_TOKEN: ${{ steps.promotion-token.outputs.token }}
           STATUS_TOKEN: ${{ github.token }}
@@ -41,7 +41,7 @@ jobs:
             -X POST \
             -f state=success \
             -f context=validate-pr \
-            -f description="develop to main promotion validated" \
+            -f description="promoção de develop para main validada" \
             -f target_url="$RUN_URL"
 
           existing_pr="$(
@@ -55,9 +55,20 @@ jobs:
           )"
 
           if [ -n "$existing_pr" ]; then
-            echo "PR develop -> main already open: #$existing_pr"
+            echo "PR develop -> main já está aberto: #$existing_pr"
             exit 0
           fi
+
+          cat > /tmp/nexora-promotion-body.md <<'EOF'
+          ## Resumo
+
+          - promover para `main` as alterações aprovadas e mescladas manualmente em `develop`.
+
+          ## Validação
+
+          - PR criado automaticamente após o merge manual em `develop`;
+          - merge em `main` permanece manual e protegido pelos checks obrigatórios.
+          EOF
 
           set +e
           create_output="$(
@@ -65,8 +76,8 @@ jobs:
               --repo "$REPOSITORY" \
               --base main \
               --head develop \
-              --title "chore: promote develop to main" \
-              --body "Automatic PR opened after a manual merge into develop." 2>&1
+              --title "chore: promover develop para main" \
+              --body-file /tmp/nexora-promotion-body.md 2>&1
           )"
           create_status="$?"
           set -e
@@ -78,7 +89,7 @@ jobs:
           fi
 
           if echo "$create_output" | grep -qi "already exists"; then
-            echo "PR develop -> main already exists."
+            echo "O PR develop -> main já existe."
             exit 0
           fi
 
