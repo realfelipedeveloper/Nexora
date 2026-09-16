@@ -8,3 +8,16 @@ export type HealthResponse = {
   status: "ok" | "ready";
   timestamp?: string;
 };
+
+export type PublicSiteConfiguration = {
+  branding?: {
+    productName: string;
+  };
+  site: {
+    identity?: {
+      description?: string;
+      displayName: string;
+    };
+    key: string;
+  };
+};

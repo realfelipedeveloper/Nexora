@@ -7,13 +7,25 @@ import {
   SiteSettingsController,
 } from "./configuration-settings.controller.js";
 import { ConfigurationSettingsService } from "./configuration-settings.service.js";
+import { PublicConfigurationController } from "./public-configuration.controller.js";
+import { PublicConfigurationService } from "./public-configuration.service.js";
 import { SiteLifecycleService } from "./site-lifecycle.service.js";
 import { SitesController } from "./sites.controller.js";
 
 @Module({
-  controllers: [GlobalSettingsController, SiteSettingsController, SitesController],
+  controllers: [
+    GlobalSettingsController,
+    SiteSettingsController,
+    SitesController,
+    PublicConfigurationController,
+  ],
   exports: [ConfigurationRegistry],
   imports: [DatabaseModule, IdentityModule],
-  providers: [ConfigurationRegistry, ConfigurationSettingsService, SiteLifecycleService],
+  providers: [
+    ConfigurationRegistry,
+    ConfigurationSettingsService,
+    PublicConfigurationService,
+    SiteLifecycleService,
+  ],
 })
 export class SitesModule {}
