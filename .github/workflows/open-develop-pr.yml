@@ -1,0 +1,73 @@
+name: Abrir PR para Develop
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - "fix/**"
+      - "refactor/**"
+      - "test/**"
+      - "docs/**"
+      - "chore/**"
+      - "hotfix/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-develop-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Abrir PR da branch de trabalho para develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin develop --no-tags
+
+          existing_pr="$(
+            gh pr list \
+              --repo "$REPOSITORY" \
+              --base develop \
+              --head "$REPOSITORY_OWNER:$HEAD_BRANCH" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [ -n "$existing_pr" ]; then
+            echo "PR para develop já está aberto: #$existing_pr"
+            exit 0
+          fi
+
+          title="$(git log "origin/develop..HEAD" --reverse --format=%s | head -n 1)"
+          if [ -z "$title" ]; then
+            title="$(git log -1 --format=%s)"
+          fi
+
+          cat > /tmp/nexora-develop-pr-body.md <<EOF
+          ## Resumo
+
+          - integrar em \`develop\` as alterações da branch \`$HEAD_BRANCH\`.
+
+          ## Validação
+
+          - PR criado automaticamente após o push da branch de trabalho;
+          - merge em \`develop\` permanece manual e sujeito aos checks obrigatórios.
+          EOF
+
+          gh pr create \
+            --repo "$REPOSITORY" \
+            --base develop \
+            --head "$HEAD_BRANCH" \
+            --title "$title" \
+            --body-file /tmp/nexora-develop-pr-body.md
