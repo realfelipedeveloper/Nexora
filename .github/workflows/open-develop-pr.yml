@@ -28,7 +28,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_BRANCH: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
 
@@ -38,7 +37,7 @@ jobs:
             gh pr list \
               --repo "$REPOSITORY" \
               --base develop \
-              --head "$REPOSITORY_OWNER:$HEAD_BRANCH" \
+              --head "$HEAD_BRANCH" \
               --state open \
               --json number \
               --jq '.[0].number // empty'
@@ -65,9 +64,27 @@ jobs:
           - merge em \`develop\` permanece manual e sujeito aos checks obrigatórios.
           EOF
 
-          gh pr create \
-            --repo "$REPOSITORY" \
-            --base develop \
-            --head "$HEAD_BRANCH" \
-            --title "$title" \
-            --body-file /tmp/nexora-develop-pr-body.md
+          set +e
+          create_output="$(
+            gh pr create \
+              --repo "$REPOSITORY" \
+              --base develop \
+              --head "$HEAD_BRANCH" \
+              --title "$title" \
+              --body-file /tmp/nexora-develop-pr-body.md 2>&1
+          )"
+          create_status="$?"
+          set -e
+
+          echo "$create_output"
+
+          if [ "$create_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if echo "$create_output" | grep -qi "already exists"; then
+            echo "O PR para develop já existe."
+            exit 0
+          fi
+
+          exit "$create_status"
