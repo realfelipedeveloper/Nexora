@@ -32,6 +32,8 @@ import {
   SiteSettingsController,
 } from "./sites/configuration-settings.controller.js";
 import { ConfigurationSettingsService } from "./sites/configuration-settings.service.js";
+import { PublicConfigurationController } from "./sites/public-configuration.controller.js";
+import { PublicConfigurationService } from "./sites/public-configuration.service.js";
 import { SiteLifecycleService } from "./sites/site-lifecycle.service.js";
 import { SitesController } from "./sites/sites.controller.js";
 
@@ -867,6 +869,65 @@ describe("PostgreSQL migrations and integration", () => {
       expect(JSON.stringify(auditEvents)).not.toContain("Nexora Updated");
       expect(JSON.stringify(auditEvents)).not.toContain("Lifecycle Settings");
       expect(JSON.stringify(auditEvents)).not.toContain(sensitiveValue);
+    } finally {
+      await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("serves only the explicit public configuration projection with a bounded cache policy", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const activeSite = await prisma.site.create({
+      data: { key: "public-configuration", name: "Administrative Site Name" },
+    });
+    await prisma.site.create({
+      data: { key: "archived-configuration", name: "Archived Site", status: "ARCHIVED" },
+    });
+    await prisma.globalSetting.upsert({
+      create: { key: "platform.branding", value: { productName: "Nexora Public" } },
+      update: { value: { productName: "Nexora Public" } },
+      where: { key: "platform.branding" },
+    });
+    await prisma.siteSetting.create({
+      data: {
+        key: "site.identity",
+        siteId: activeSite.id,
+        value: { description: "Public configuration", displayName: "Public Site" },
+      },
+    });
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [PublicConfigurationController],
+      providers: [
+        ConfigurationRegistry,
+        PublicConfigurationService,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    configureHttpSecurity(app);
+    await app.init();
+
+    try {
+      const response = await request(app.getHttpServer())
+        .get("/public/sites/public-configuration/configuration")
+        .expect(200);
+
+      expect(response.headers["cache-control"]).toBe(
+        "public, max-age=60, s-maxage=300, stale-while-revalidate=60",
+      );
+      expect(response.body).toEqual({
+        branding: { productName: "Nexora Public" },
+        site: {
+          identity: { description: "Public configuration", displayName: "Public Site" },
+          key: "public-configuration",
+        },
+      });
+      expect(JSON.stringify(response.body)).not.toContain(activeSite.id);
+      expect(JSON.stringify(response.body)).not.toContain("Administrative Site Name");
+      await request(app.getHttpServer())
+        .get("/public/sites/archived-configuration/configuration")
+        .expect(404);
     } finally {
       await app.close();
       await prisma.$disconnect();
