@@ -58,6 +58,11 @@ const registries: Record<ConfigurationScope, Readonly<Record<string, Configurati
   site: siteConfigurationSchemas,
 };
 
+const publicProjectionKeys: Record<ConfigurationScope, readonly string[]> = {
+  global: Object.freeze(["platform.branding"]),
+  site: Object.freeze(["site.identity"]),
+};
+
 function sanitizedPath(path: readonly PropertyKey[]) {
   return path
     .map((segment) => String(segment))
@@ -83,6 +88,10 @@ function encodedSize(value: unknown) {
 export class ConfigurationRegistry {
   registeredKeys(scope: ConfigurationScope) {
     return Object.freeze(Object.keys(registries[scope]));
+  }
+
+  publicKeys(scope: ConfigurationScope) {
+    return publicProjectionKeys[scope];
   }
 
   validateGlobal<Key extends GlobalConfigurationKey>(

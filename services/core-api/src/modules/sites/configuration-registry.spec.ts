@@ -22,6 +22,8 @@ describe("ConfigurationRegistry", () => {
     expect(identity.displayName).toBe("Main Site");
     expect(registry.registeredKeys("global")).toEqual(["platform.branding"]);
     expect(registry.registeredKeys("site")).toEqual(["site.identity"]);
+    expect(registry.publicKeys("global")).toEqual(["platform.branding"]);
+    expect(registry.publicKeys("site")).toEqual(["site.identity"]);
   });
 
   it("rejects keys outside their registered scope", () => {
