@@ -12,6 +12,7 @@ ARG NEXORA_TARGET
 ENV NEXORA_TARGET=${NEXORA_TARGET}
 
 RUN pnpm install --frozen-lockfile
+RUN pnpm prisma:generate
 RUN pnpm build
 
 CMD ["sh", "-c", "pnpm --filter \"$NEXORA_TARGET\" start"]

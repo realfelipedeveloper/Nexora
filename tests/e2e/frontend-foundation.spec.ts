@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const webUrl = `http://localhost:${process.env.PLAYWRIGHT_WEB_PORT ?? "48110"}`;
 const cmsUrl = `http://localhost:${process.env.PLAYWRIGHT_CMS_PORT ?? "48111"}`;
@@ -14,6 +14,15 @@ const authenticatedSession = {
     isSystemAdmin: true,
   },
 };
+
+async function routeEmptyWorkspace(page: Page) {
+  await page.route("**/api/core/sites", async (route) => {
+    await route.fulfill({ json: [], status: 200 });
+  });
+  await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+    await route.fulfill({ body: "", status: 404 });
+  });
+}
 
 test.describe("frontend foundation", () => {
   test("public app renders and passes accessibility checks", async ({ page }) => {
@@ -92,6 +101,7 @@ test.describe("frontend foundation", () => {
       authorizationHeader = route.request().headers().authorization;
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
+    await routeEmptyWorkspace(page);
     await page.goto(cmsUrl);
 
     await page.getByLabel("Email").fill("admin@example.com");
@@ -124,6 +134,7 @@ test.describe("frontend foundation", () => {
       logoutHeader = route.request().headers()["x-csrf-token"];
       await route.fulfill({ body: "", status: 204 });
     });
+    await routeEmptyWorkspace(page);
 
     await page.goto(cmsUrl);
 
@@ -137,5 +148,110 @@ test.describe("frontend foundation", () => {
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
     expect(logoutHeader).toBe(csrfToken);
+  });
+
+  test("cms saves scoped settings with the selected site's version", async ({ page }) => {
+    let brandingHeaders: Record<string, string> | undefined;
+    let identityHeaders: Record<string, string> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      if (route.request().method() === "PUT") {
+        brandingHeaders = route.request().headers();
+        await route.fulfill({
+          headers: { ETag: '"2"' },
+          json: { key: "platform.branding", value: { productName: "Nexora One" }, version: 2 },
+          status: 200,
+        });
+        return;
+      }
+      await route.fulfill({
+        headers: { ETag: '"1"' },
+        json: { key: "platform.branding", value: { productName: "Nexora" }, version: 1 },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      if (route.request().method() === "PUT") {
+        identityHeaders = route.request().headers();
+        await route.fulfill({
+          headers: { ETag: '"4"' },
+          json: { key: "site.identity", value: { displayName: "Docs" }, version: 4 },
+          status: 200,
+        });
+        return;
+      }
+      await route.fulfill({
+        headers: { ETag: '"3"' },
+        json: { key: "site.identity", value: { displayName: "Documentation" }, version: 3 },
+        status: 200,
+      });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Settings" }).click();
+
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Current site")).toHaveValue("site-1");
+    await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
+    await page.getByLabel("Product name").fill("Nexora One");
+    await page.getByRole("button", { name: "Save branding" }).click();
+    await expect(page.getByText("Platform branding saved.")).toBeVisible();
+    await page.getByLabel("Display name").fill("Docs");
+    await page.getByRole("button", { name: "Save site settings" }).click();
+    await expect(page.getByText("Site identity saved.")).toBeVisible();
+
+    expect(brandingHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(brandingHeaders?.["if-match"]).toBe('"1"');
+    expect(identityHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(identityHeaders?.["if-match"]).toBe('"3"');
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms offers a reload action after a configuration conflict", async ({ page }) => {
+    let identityReads = 0;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({ body: "", status: 412 });
+        return;
+      }
+      identityReads += 1;
+      await route.fulfill({
+        headers: { ETag: '"3"' },
+        json: { key: "site.identity", value: { displayName: "Documentation" }, version: 3 },
+        status: 200,
+      });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
+    await page.getByLabel("Display name").fill("Docs");
+    await page.getByRole("button", { name: "Save site settings" }).click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "This setting changed elsewhere" }),
+    ).toContainText("This setting changed elsewhere. Reload it before saving again.");
+    await page.getByRole("button", { name: "Reload" }).click();
+    await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
+    expect(identityReads).toBe(2);
   });
 });

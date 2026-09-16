@@ -1,18 +1,9 @@
 "use client";
 
-import {
-  CircleAlert,
-  Eye,
-  EyeOff,
-  FileText,
-  LayoutDashboard,
-  LoaderCircle,
-  LockKeyhole,
-  LogOut,
-} from "lucide-react";
+import { CircleAlert, Eye, EyeOff, LoaderCircle, LockKeyhole } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { initialFieldTypes } from "@nexora/schemas";
 import { AuthenticationApiError, type CmsSession, login, logout, restoreSession } from "./auth-api";
+import { CmsWorkspace } from "./cms-workspace";
 
 type AuthState =
   | { status: "checking" }
@@ -201,75 +192,11 @@ export function CmsAuth() {
   }
 
   return (
-    <main className="cms-shell">
-      <aside className="sidebar">
-        <header className="sidebar-brand">
-          <span className="brand-mark" aria-hidden="true">
-            N
-          </span>
-          <div>
-            <strong>Nexora</strong>
-            <span>CMS</span>
-          </div>
-        </header>
-        <nav aria-label="CMS navigation">
-          <span className="nav-current" aria-current="page">
-            <LayoutDashboard aria-hidden="true" size={18} />
-            Overview
-          </span>
-        </nav>
-      </aside>
-
-      <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <p className="eyebrow">Content workspace</p>
-            <h1>Overview</h1>
-          </div>
-          <div className="account-menu">
-            <div className="account-copy">
-              <strong>{auth.session.user.displayName}</strong>
-              <span>{auth.session.user.email}</span>
-            </div>
-            <button
-              aria-label="Sign out"
-              className="icon-button account-logout"
-              disabled={submitting}
-              onClick={() => void handleLogout(auth.session)}
-              title="Sign out"
-              type="button"
-            >
-              <LogOut aria-hidden="true" />
-            </button>
-          </div>
-        </header>
-
-        {logoutError ? (
-          <p className="workspace-alert" role="alert">
-            <CircleAlert aria-hidden="true" size={17} />
-            Sign-out failed. Your session remains active.
-          </p>
-        ) : null}
-
-        <section className="content-section" aria-labelledby="content-model-title">
-          <div className="section-heading">
-            <div className="section-icon" aria-hidden="true">
-              <FileText size={20} />
-            </div>
-            <div>
-              <h2 id="content-model-title">Content model foundation</h2>
-              <p>Available field types</p>
-            </div>
-          </div>
-          <section className="field-grid" aria-label="Initial field types">
-            {initialFieldTypes.map((field) => (
-              <article key={field} className="field-tile">
-                {field}
-              </article>
-            ))}
-          </section>
-        </section>
-      </section>
-    </main>
+    <CmsWorkspace
+      logoutError={logoutError}
+      onLogout={() => void handleLogout(auth.session)}
+      session={auth.session}
+      signingOut={submitting}
+    />
   );
 }
