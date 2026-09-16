@@ -274,7 +274,6 @@ test.describe("frontend foundation", () => {
     expect(savedSiteHeaders?.["x-csrf-token"]).toBe(csrfToken);
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
-
   test("cms offers a reload action after a configuration conflict", async ({ page }) => {
     let identityReads = 0;
     await page.route("**/api/core/auth/session", async (route) => {
