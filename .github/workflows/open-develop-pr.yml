@@ -48,7 +48,7 @@ jobs:
             exit 0
           fi
 
-          title="$(git log "origin/develop..HEAD" --reverse --format=%s | head -n 1)"
+          title="$(git log --first-parent "origin/develop..HEAD" --reverse --format=%s | head -n 1)"
           if [ -z "$title" ]; then
             title="$(git log -1 --format=%s)"
           fi
