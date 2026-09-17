@@ -89,7 +89,15 @@ export const fieldDefinitionSchema = z.strictObject({
   label: z.string().trim().min(1).max(120),
   fieldType: fieldTypeSchema,
   required: z.boolean().default(false),
+  position: z.number().int().nonnegative().default(0),
   config: contentLocaleDataSchema.default({}),
+});
+
+export const contentTypeSchemaDefinitionSchema = z.strictObject({
+  displayName: z.string().trim().min(1).max(120),
+  fields: z.array(fieldDefinitionSchema).max(100),
+  key: contentTypeKeySchema,
+  version: contentSchemaVersionSchema,
 });
 
 export type InitialFieldType = (typeof initialFieldTypes)[number];

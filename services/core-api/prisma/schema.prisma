@@ -157,9 +157,10 @@ model ContentType {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  site   Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  fields FieldDefinition[]
-  entries ContentEntry[]
+  site           Site                       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  fields         FieldDefinition[]
+  schemaVersions ContentTypeSchemaVersion[]
+  entries        ContentEntry[]
 
   @@unique([siteId, key])
   @@unique([id, siteId])
@@ -182,6 +183,21 @@ model FieldDefinition {
   @@unique([contentTypeId, key])
 }
 
+model ContentTypeSchemaVersion {
+  id            String   @id @default(uuid())
+  siteId        String
+  contentTypeId String
+  version       Int
+  definition    Json
+  createdAt     DateTime @default(now())
+
+  contentType ContentType    @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Cascade)
+  entries     ContentEntry[]
+
+  @@unique([contentTypeId, siteId, version])
+  @@index([siteId, createdAt])
+}
+
 model ContentEntry {
   id            String   @id @default(uuid())
   siteId        String
@@ -191,9 +207,10 @@ model ContentEntry {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  contentType  ContentType   @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Restrict)
-  contentLocales ContentLocale[]
+  site                     Site                     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentType              ContentType              @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Restrict)
+  contentTypeSchemaVersion ContentTypeSchemaVersion @relation(fields: [contentTypeId, siteId, schemaVersion], references: [contentTypeId, siteId, version], onDelete: Restrict)
+  contentLocales           ContentLocale[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])

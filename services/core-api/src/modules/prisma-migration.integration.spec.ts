@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
 import { platform } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Test } from "@nestjs/testing";
 import type { INestApplication, LoggerService } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { Client } from "pg";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PRISMA_CLIENT } from "../database/database.module.js";
@@ -39,6 +42,44 @@ import { SitesController } from "./sites/sites.controller.js";
 
 const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+const migrationsRoot = path.join(workspaceRoot, "services", "core-api", "prisma", "migrations");
+const contentSchemaVersioningMigration = "20260917180000_content_schema_versioning";
+
+async function applyMigrationsBeforeContentSchemaVersioning(connectionString: string) {
+  const client = new Client({ connectionString });
+  const migrationDirectories = (await readdir(migrationsRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && entry.name < contentSchemaVersioningMigration)
+    .map((entry) => entry.name)
+    .sort();
+
+  await client.connect();
+  try {
+    for (const migrationDirectory of migrationDirectories) {
+      const migration = await readFile(
+        path.join(migrationsRoot, migrationDirectory, "migration.sql"),
+        "utf8",
+      );
+      await client.query(migration);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+async function applyContentSchemaVersioningMigration(connectionString: string) {
+  const client = new Client({ connectionString });
+  const migration = await readFile(
+    path.join(migrationsRoot, contentSchemaVersioningMigration, "migration.sql"),
+    "utf8",
+  );
+
+  await client.connect();
+  try {
+    await client.query(migration);
+  } finally {
+    await client.end();
+  }
+}
 
 class CapturedLogger implements LoggerService {
   readonly entries: unknown[] = [];
@@ -120,6 +161,7 @@ describe("PostgreSQL migrations and integration", () => {
         "ContentEntry",
         "ContentLocale",
         "ContentType",
+        "ContentTypeSchemaVersion",
         "FieldDefinition",
         "GlobalSetting",
         "Locale",
@@ -338,6 +380,29 @@ describe("PostgreSQL migrations and integration", () => {
       });
       expect(field.config).toEqual({});
 
+      const firstSchemaVersion = await prisma.contentTypeSchemaVersion.create({
+        data: {
+          contentTypeId: firstType.id,
+          definition: {
+            displayName: firstType.displayName,
+            fields: [
+              {
+                config: field.config,
+                fieldType: field.fieldType,
+                key: field.key,
+                label: field.label,
+                position: field.position,
+                required: field.required,
+              },
+            ],
+            key: firstType.key,
+            version: 1,
+          },
+          siteId: firstSite.id,
+          version: 1,
+        },
+      });
+
       const entry = await prisma.contentEntry.create({
         data: { contentTypeId: firstType.id, siteId: firstSite.id },
       });
@@ -356,6 +421,50 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 1,
         schemaVersion: 1,
       });
+
+      await prisma.contentTypeSchemaVersion.create({
+        data: {
+          contentTypeId: firstType.id,
+          definition: {
+            displayName: firstType.displayName,
+            fields: [
+              {
+                config: field.config,
+                fieldType: field.fieldType,
+                key: field.key,
+                label: field.label,
+                position: field.position,
+                required: field.required,
+              },
+              {
+                config: {},
+                fieldType: "text",
+                key: "subtitle",
+                label: "Subtitle",
+                position: 1,
+                required: false,
+              },
+            ],
+            key: firstType.key,
+            version: 2,
+          },
+          siteId: firstSite.id,
+          version: 2,
+        },
+      });
+      await prisma.contentType.update({
+        data: { schemaVersion: 2 },
+        where: { id: firstType.id },
+      });
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).resolves.toMatchObject({ schemaVersion: firstSchemaVersion.version });
+      await expect(
+        prisma.contentTypeSchemaVersion.update({
+          data: { definition: { key: "mutated" } },
+          where: { id: firstSchemaVersion.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
 
       await expect(
         prisma.contentEntry.create({
@@ -399,6 +508,77 @@ describe("PostgreSQL migrations and integration", () => {
       });
     } finally {
       await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("backfills immutable schema versions without changing legacy entries", async () => {
+    const legacyPostgres = await new PostgreSqlContainer("postgres:17-alpine")
+      .withDatabase("nexora_legacy")
+      .withUsername("nexora")
+      .withPassword("nexora_legacy_password")
+      .start();
+    const connectionString = legacyPostgres.getConnectionUri();
+    const prisma = createPrismaClient(connectionString);
+
+    try {
+      await applyMigrationsBeforeContentSchemaVersioning(connectionString);
+
+      const site = await prisma.site.create({
+        data: { key: "legacy-content", name: "Legacy Content" },
+      });
+      const locale = await prisma.locale.create({
+        data: { code: "pt-BR", isDefault: true, siteId: site.id },
+      });
+      const contentType = await prisma.contentType.create({
+        data: {
+          displayName: "Legacy Page",
+          key: "legacy-page",
+          siteId: site.id,
+        },
+      });
+      await prisma.fieldDefinition.create({
+        data: {
+          contentTypeId: contentType.id,
+          fieldType: "text",
+          key: "title",
+          label: "Title",
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, siteId: site.id },
+      });
+      const legacyData = { title: "Preserved content" };
+      await prisma.contentLocale.create({
+        data: {
+          contentEntryId: entry.id,
+          data: legacyData,
+          localeId: locale.id,
+          siteId: site.id,
+        },
+      });
+
+      await applyContentSchemaVersioningMigration(connectionString);
+
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({
+          include: { contentLocales: true, contentTypeSchemaVersion: true },
+          where: { id: entry.id },
+        }),
+      ).resolves.toMatchObject({
+        contentLocales: [{ data: legacyData }],
+        contentTypeSchemaVersion: {
+          definition: {
+            fields: [expect.objectContaining({ key: "title" })],
+            key: contentType.key,
+            version: 1,
+          },
+          version: 1,
+        },
+        schemaVersion: 1,
+      });
+    } finally {
+      await prisma.$disconnect();
+      await legacyPostgres.stop();
     }
   }, 120_000);
 
