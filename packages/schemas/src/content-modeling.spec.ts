@@ -3,6 +3,7 @@ import {
   contentLocaleDataSchema,
   contentSchemaVersionSchema,
   contentTypeKeySchema,
+  contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
 } from "./index.js";
 
@@ -25,6 +26,7 @@ describe("content modeling contracts", () => {
       fieldType: "richText",
       key: "body",
       label: "Body",
+      position: 0,
       required: false,
     });
 
@@ -50,5 +52,27 @@ describe("content modeling contracts", () => {
     expect(contentLocaleDataSchema.safeParse(["Nexora"]).success).toBe(false);
     expect(contentSchemaVersionSchema.safeParse(1).success).toBe(true);
     expect(contentSchemaVersionSchema.safeParse(0).success).toBe(false);
+  });
+
+  it("accepts bounded, typed schema snapshots for a content type version", () => {
+    expect(
+      contentTypeSchemaDefinitionSchema.parse({
+        displayName: "Institutional Page",
+        fields: [{ fieldType: "text", key: "title", label: "Title" }],
+        key: "institutional-page",
+        version: 2,
+      }),
+    ).toMatchObject({
+      fields: [{ key: "title", position: 0 }],
+      version: 2,
+    });
+    expect(
+      contentTypeSchemaDefinitionSchema.safeParse({
+        displayName: "Institutional Page",
+        fields: [],
+        key: "institutional-page",
+        version: 0,
+      }).success,
+    ).toBe(false);
   });
 });
