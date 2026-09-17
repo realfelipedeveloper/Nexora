@@ -10,6 +10,7 @@ const ignored = new Set([
   ".next",
   "coverage",
   "nexora-sdd-engineering-loop",
+  "nexora-promotion-bot.2026-09-12.private-key.pem",
 ]);
 const patterns = [
   /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/,

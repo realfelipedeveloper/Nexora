@@ -71,12 +71,25 @@ export const initialFieldTypes = [
 
 export const fieldTypeSchema = z.enum(initialFieldTypes);
 
-export const fieldDefinitionSchema = z.object({
-  key: z.string().min(1),
-  label: z.string().min(1),
+export const contentTypeKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(63)
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u);
+
+export const fieldDefinitionKeySchema = contentTypeKeySchema;
+
+export const contentSchemaVersionSchema = z.number().int().positive();
+
+export const contentLocaleDataSchema = z.record(z.string(), z.unknown());
+
+export const fieldDefinitionSchema = z.strictObject({
+  key: fieldDefinitionKeySchema,
+  label: z.string().trim().min(1).max(120),
   fieldType: fieldTypeSchema,
   required: z.boolean().default(false),
-  config: z.record(z.string(), z.unknown()).default({}),
+  config: contentLocaleDataSchema.default({}),
 });
 
 export type InitialFieldType = (typeof initialFieldTypes)[number];
