@@ -75,4 +75,26 @@ describe("content modeling contracts", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects duplicated fields and configuration that does not match the field type", () => {
+    expect(
+      contentTypeSchemaDefinitionSchema.safeParse({
+        displayName: "Article",
+        fields: [
+          { fieldType: "text", key: "title", label: "Title" },
+          { fieldType: "text", key: "title", label: "Duplicate title" },
+        ],
+        key: "article",
+        version: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      fieldDefinitionSchema.safeParse({
+        config: { options: [] },
+        fieldType: "select",
+        key: "kind",
+        label: "Kind",
+      }).success,
+    ).toBe(false);
+  });
 });
