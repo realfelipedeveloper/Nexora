@@ -117,6 +117,8 @@ describe("PostgreSQL migrations and integration", () => {
     expect(tableList.output.split(/\s+/).filter(Boolean)).toEqual(
       expect.arrayContaining([
         "AuditEvent",
+        "ContentEntry",
+        "ContentLocale",
         "ContentType",
         "FieldDefinition",
         "GlobalSetting",
@@ -290,6 +292,111 @@ describe("PostgreSQL migrations and integration", () => {
       await expect(
         prisma.globalSetting.findUnique({ where: { key: "platform.branding" } }),
       ).resolves.toMatchObject({ version: 1 });
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("enforces editorial content persistence invariants and multi-site isolation", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const firstSite = await prisma.site.create({
+        data: { key: "content-first", name: "Content First" },
+      });
+      const secondSite = await prisma.site.create({
+        data: { key: "content-second", name: "Content Second" },
+      });
+      const [firstLocale, secondLocale] = await Promise.all([
+        prisma.locale.create({
+          data: { code: "pt-BR", isDefault: true, siteId: firstSite.id },
+        }),
+        prisma.locale.create({
+          data: { code: "en-US", isDefault: true, siteId: secondSite.id },
+        }),
+      ]);
+      const [firstType, secondType] = await Promise.all([
+        prisma.contentType.create({
+          data: {
+            displayName: "Institutional Page",
+            key: "institutional-page",
+            siteId: firstSite.id,
+          },
+        }),
+        prisma.contentType.create({
+          data: { displayName: "News Article", key: "news-article", siteId: secondSite.id },
+        }),
+      ]);
+
+      const field = await prisma.fieldDefinition.create({
+        data: {
+          contentTypeId: firstType.id,
+          fieldType: "richText",
+          key: "body",
+          label: "Body",
+        },
+      });
+      expect(field.config).toEqual({});
+
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: firstType.id, siteId: firstSite.id },
+      });
+      expect(entry).toMatchObject({ revision: 1, schemaVersion: 1, siteId: firstSite.id });
+
+      const contentLocale = await prisma.contentLocale.create({
+        data: {
+          contentEntryId: entry.id,
+          data: { title: "Nexora" },
+          localeId: firstLocale.id,
+          siteId: firstSite.id,
+        },
+      });
+      expect(contentLocale).toMatchObject({
+        data: { title: "Nexora" },
+        revision: 1,
+        schemaVersion: 1,
+      });
+
+      await expect(
+        prisma.contentEntry.create({
+          data: { contentTypeId: secondType.id, siteId: firstSite.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+      await expect(
+        prisma.contentLocale.create({
+          data: {
+            contentEntryId: entry.id,
+            data: { title: "Wrong site" },
+            localeId: secondLocale.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+      await expect(
+        prisma.contentLocale.create({
+          data: {
+            contentEntryId: entry.id,
+            data: "not-an-object",
+            localeId: firstLocale.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.fieldDefinition.create({
+          data: {
+            contentTypeId: firstType.id,
+            fieldType: "unsupported",
+            key: "invalid-field",
+            label: "Invalid field",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.contentType.delete({ where: { id: firstType.id } }),
+      ).rejects.toMatchObject({
+        code: "P2003",
+      });
     } finally {
       await prisma.$disconnect();
     }
