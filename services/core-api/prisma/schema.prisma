@@ -58,6 +58,7 @@ model Site {
 
   locales         Locale[]
   contentTypes    ContentType[]
+  contentEntries  ContentEntry[]
   roleAssignments SiteRoleAssignment[]
   settings        SiteSetting[]
 
@@ -141,7 +142,10 @@ model Locale {
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
+  contentLocales ContentLocale[]
+
   @@unique([siteId, code])
+  @@unique([id, siteId])
 }
 
 model ContentType {
@@ -155,8 +159,10 @@ model ContentType {
 
   site   Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
   fields FieldDefinition[]
+  entries ContentEntry[]
 
   @@unique([siteId, key])
+  @@unique([id, siteId])
 }
 
 model FieldDefinition {
@@ -169,10 +175,46 @@ model FieldDefinition {
   position      Int      @default(0)
   config        Json     @default("{}")
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   contentType ContentType @relation(fields: [contentTypeId], references: [id], onDelete: Cascade)
 
   @@unique([contentTypeId, key])
+}
+
+model ContentEntry {
+  id            String   @id @default(uuid())
+  siteId        String
+  contentTypeId String
+  schemaVersion Int      @default(1)
+  revision      Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentType  ContentType   @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Restrict)
+  contentLocales ContentLocale[]
+
+  @@unique([id, siteId])
+  @@index([siteId, contentTypeId, updatedAt])
+}
+
+model ContentLocale {
+  id             String   @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  localeId       String
+  data           Json     @default("{}")
+  schemaVersion  Int      @default(1)
+  revision       Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([contentEntryId, localeId])
+  @@index([siteId, localeId, updatedAt])
 }
 
 model AuditEvent {
