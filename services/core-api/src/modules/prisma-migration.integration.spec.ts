@@ -714,6 +714,16 @@ describe("PostgreSQL migrations and integration", () => {
       where: { id: existingAdmin.id },
     });
     const site = await prisma.site.findUniqueOrThrow({ where: { key: "lifecycle-site" } });
+    const restrictedSite = await prisma.site.create({
+      data: { key: "restricted-settings", name: "Restricted Settings" },
+    });
+    await prisma.siteSetting.create({
+      data: {
+        key: "site.identity",
+        siteId: restrictedSite.id,
+        value: { description: "Never expose this configuration", displayName: "Restricted Site" },
+      },
+    });
     const siteAdmin = await prisma.user.create({
       data: {
         displayName: "Settings Site Admin",
@@ -844,6 +854,50 @@ describe("PostgreSQL migrations and integration", () => {
         .send({ displayName: "Duplicate" })
         .expect(412);
 
+      const restrictedRead = await request(app.getHttpServer())
+        .get(`/sites/${restrictedSite.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .expect(403);
+      expect(JSON.stringify(restrictedRead.body)).not.toContain("Restricted Site");
+      expect(JSON.stringify(restrictedRead.body)).not.toContain("Never expose this configuration");
+      const restrictedWrite = await request(app.getHttpServer())
+        .put(`/sites/${restrictedSite.id}/settings/site.identity`)
+        .set("Cookie", siteAdminSession.cookie)
+        .set("x-csrf-token", siteAdminSession.csrfToken)
+        .set("If-Match", '"1"')
+        .send({ displayName: "Attempted cross-site write" })
+        .expect(403);
+      expect(JSON.stringify(restrictedWrite.body)).not.toContain("Attempted cross-site write");
+      await expect(
+        prisma.siteSetting.findUniqueOrThrow({
+          where: { siteId_key: { key: "site.identity", siteId: restrictedSite.id } },
+        }),
+      ).resolves.toMatchObject({
+        value: { description: "Never expose this configuration", displayName: "Restricted Site" },
+        version: 1,
+      });
+
+      const concurrentSiteWrites = await Promise.all([
+        request(app.getHttpServer())
+          .put(`/sites/${site.id}/settings/site.identity`)
+          .set("Cookie", siteAdminSession.cookie)
+          .set("x-csrf-token", siteAdminSession.csrfToken)
+          .set("If-Match", '"1"')
+          .send({ displayName: "Concurrent Site A" }),
+        request(app.getHttpServer())
+          .put(`/sites/${site.id}/settings/site.identity`)
+          .set("Cookie", siteAdminSession.cookie)
+          .set("x-csrf-token", siteAdminSession.csrfToken)
+          .set("If-Match", '"1"')
+          .send({ displayName: "Concurrent Site B" }),
+      ]);
+      expect(concurrentSiteWrites.map((response) => response.status).sort()).toEqual([200, 412]);
+      await expect(
+        prisma.siteSetting.findUniqueOrThrow({
+          where: { siteId_key: { key: "site.identity", siteId: site.id } },
+        }),
+      ).resolves.toMatchObject({ version: 2 });
+
       const sensitiveValue = "NeverPersistInAudit";
       const invalid = await request(app.getHttpServer())
         .put(`/sites/${site.id}/settings/site.identity`)
@@ -865,7 +919,7 @@ describe("PostgreSQL migrations and integration", () => {
       ).toHaveLength(2);
       expect(
         auditEvents.filter((event) => event.action === "configuration.site.written"),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       expect(JSON.stringify(auditEvents)).not.toContain("Nexora Updated");
       expect(JSON.stringify(auditEvents)).not.toContain("Lifecycle Settings");
       expect(JSON.stringify(auditEvents)).not.toContain(sensitiveValue);
@@ -911,6 +965,7 @@ describe("PostgreSQL migrations and integration", () => {
     try {
       const response = await request(app.getHttpServer())
         .get("/public/sites/public-configuration/configuration")
+        .set("Cookie", "nexora_session=opaque-session-token")
         .expect(200);
 
       expect(response.headers["cache-control"]).toBe(
@@ -925,6 +980,8 @@ describe("PostgreSQL migrations and integration", () => {
       });
       expect(JSON.stringify(response.body)).not.toContain(activeSite.id);
       expect(JSON.stringify(response.body)).not.toContain("Administrative Site Name");
+      expect(response.headers.etag).toMatch(/^W\/"[A-Za-z0-9_-]+"$/u);
+      expect(response.headers["set-cookie"]).toBeUndefined();
       await request(app.getHttpServer())
         .get("/public/sites/archived-configuration/configuration")
         .expect(404);

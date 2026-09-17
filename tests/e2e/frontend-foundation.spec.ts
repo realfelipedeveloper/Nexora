@@ -215,6 +215,65 @@ test.describe("frontend foundation", () => {
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 
+  test("cms keeps settings writes within the currently selected site", async ({ page }) => {
+    const identityRequests: string[] = [];
+    let savedSiteId: string | undefined;
+    let savedSiteHeaders: Record<string, string> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [
+          { id: "site-alpha", key: "alpha", name: "Alpha", status: "ACTIVE" },
+          { id: "site-beta", key: "beta", name: "Beta", status: "ACTIVE" },
+        ],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/*/settings/site.identity", async (route) => {
+      const siteId = new URL(route.request().url()).pathname.split("/")[4];
+      identityRequests.push(siteId ?? "");
+      if (route.request().method() === "PUT") {
+        savedSiteId = siteId;
+        savedSiteHeaders = route.request().headers();
+        await route.fulfill({
+          headers: { ETag: '"8"' },
+          json: { key: "site.identity", value: { displayName: "Beta Updated" }, version: 8 },
+          status: 200,
+        });
+        return;
+      }
+      await route.fulfill({
+        headers: { ETag: siteId === "site-alpha" ? '"3"' : '"7"' },
+        json: {
+          key: "site.identity",
+          value: { displayName: siteId === "site-alpha" ? "Alpha" : "Beta" },
+          version: siteId === "site-alpha" ? 3 : 7,
+        },
+        status: 200,
+      });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByLabel("Current site")).toHaveValue("site-alpha");
+    await expect(page.getByLabel("Display name")).toHaveValue("Alpha");
+    await page.getByLabel("Current site").selectOption("site-beta");
+    await expect(page.getByLabel("Display name")).toHaveValue("Beta");
+    await page.getByLabel("Display name").fill("Beta Updated");
+    await page.getByRole("button", { name: "Save site settings" }).click();
+
+    await expect(page.getByText("Site identity saved.")).toBeVisible();
+    expect(identityRequests).toEqual(expect.arrayContaining(["site-alpha", "site-beta"]));
+    expect(savedSiteId).toBe("site-beta");
+    expect(savedSiteHeaders?.["if-match"]).toBe('"7"');
+    expect(savedSiteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
   test("cms offers a reload action after a configuration conflict", async ({ page }) => {
     let identityReads = 0;
     await page.route("**/api/core/auth/session", async (route) => {
