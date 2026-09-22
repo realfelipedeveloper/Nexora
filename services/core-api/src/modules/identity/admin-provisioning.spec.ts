@@ -21,7 +21,10 @@ function prismaWithTransaction(
 
 describe("initial administrator provisioning", () => {
   it("normalizes the profile and writes the audit event atomically", async () => {
+    const acquireProvisioningLock = vi.fn().mockResolvedValue([{ locked: "" }]);
+    const findExistingAdmin = vi.fn().mockResolvedValue(null);
     const transaction = {
+      $queryRaw: acquireProvisioningLock,
       auditEvent: { create: vi.fn().mockResolvedValue({}) },
       user: {
         create: vi.fn().mockResolvedValue({
@@ -29,7 +32,7 @@ describe("initial administrator provisioning", () => {
           email: "Admin@Example.com",
           id: "admin-1",
         }),
-        findFirst: vi.fn().mockResolvedValue(null),
+        findFirst: findExistingAdmin,
       },
     } as unknown as Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
     const prisma = prismaWithTransaction(transaction);
@@ -57,6 +60,10 @@ describe("initial administrator provisioning", () => {
         }),
       }),
     );
+    expect(acquireProvisioningLock).toHaveBeenCalledOnce();
+    expect(acquireProvisioningLock.mock.invocationCallOrder[0]).toBeLessThan(
+      findExistingAdmin.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(transaction.auditEvent.create).toHaveBeenCalledWith({
       data: {
         action: "identity.system_admin.provisioned",
@@ -70,6 +77,7 @@ describe("initial administrator provisioning", () => {
 
   it("refuses to replace an existing system administrator", async () => {
     const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ locked: "" }]),
       user: {
         findFirst: vi.fn().mockResolvedValue({ id: "existing-admin" }),
       },
@@ -84,10 +92,10 @@ describe("initial administrator provisioning", () => {
     ).rejects.toBeInstanceOf(AdminAlreadyProvisionedError);
   });
 
-  it.each(["P2002", "P2034"])("maps Prisma %s races to an existing administrator", async (code) => {
+  it("maps a unique constraint race to the existing administrator", async () => {
     const prismaError = new Prisma.PrismaClientKnownRequestError("race", {
       clientVersion: "7.10.0",
-      code,
+      code: "P2002",
     });
     const prisma = {
       $transaction: vi.fn().mockRejectedValue(prismaError),
@@ -101,15 +109,12 @@ describe("initial administrator provisioning", () => {
         password: "correct horse battery staple",
       }),
     ).rejects.toBeInstanceOf(AdminAlreadyProvisionedError);
-    expect(prisma.$transaction).toHaveBeenCalledTimes(code === "P2034" ? 3 : 1);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
-  it("retries a serialization conflict and provisions successfully", async () => {
-    const conflict = new Prisma.PrismaClientKnownRequestError("race", {
-      clientVersion: "7.10.0",
-      code: "P2034",
-    });
+  it("uses a bounded read-committed transaction", async () => {
     const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ locked: "" }]),
       auditEvent: { create: vi.fn().mockResolvedValue({}) },
       user: {
         create: vi.fn().mockResolvedValue({
@@ -121,7 +126,6 @@ describe("initial administrator provisioning", () => {
       },
     } as unknown as Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
     const prisma = prismaWithTransaction(transaction);
-    vi.mocked(prisma.$transaction).mockRejectedValueOnce(conflict);
 
     await expect(
       provisionInitialAdmin(prisma, {
@@ -134,13 +138,17 @@ describe("initial administrator provisioning", () => {
       email: "admin@example.com",
       id: "admin-1",
     });
-    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      maxWait: 5_000,
+      timeout: 10_000,
+    });
   });
 
-  it("preserves a Prisma conflict when no administrator won the race", async () => {
+  it("preserves a unique constraint error when no administrator won the race", async () => {
     const prismaError = new Prisma.PrismaClientKnownRequestError("race", {
       clientVersion: "7.10.0",
-      code: "P2034",
+      code: "P2002",
     });
     const prisma = {
       $transaction: vi.fn().mockRejectedValue(prismaError),
@@ -154,7 +162,7 @@ describe("initial administrator provisioning", () => {
         password: "correct horse battery staple",
       }),
     ).rejects.toBe(prismaError);
-    expect(prisma.$transaction).toHaveBeenCalledTimes(3);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
   it("preserves unexpected persistence errors", async () => {
