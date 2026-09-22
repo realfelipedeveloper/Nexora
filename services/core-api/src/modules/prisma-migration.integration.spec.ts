@@ -13,6 +13,12 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PRISMA_CLIENT } from "../database/database.module.js";
 import { createPrismaClient } from "../database/prisma-client.js";
+import {
+  ContentEntriesController,
+  ContentTypesController,
+} from "./content/content-admin.controller.js";
+import { ContentAdminService } from "./content/content-admin.service.js";
+import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { configureHttpSecurity } from "./http-security.js";
 import {
   AdminAlreadyProvisionedError,
@@ -579,6 +585,224 @@ describe("PostgreSQL migrations and integration", () => {
     } finally {
       await prisma.$disconnect();
       await legacyPostgres.stop();
+    }
+  }, 120_000);
+
+  it("enforces multi-site administrative content CRUD with audit metadata", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const password = "content administration integration password";
+    const editor = await prisma.user.create({
+      data: {
+        displayName: "Content Editor",
+        email: "content.editor@example.com",
+        normalizedEmail: "content.editor@example.com",
+        passwordHash: await hashPassword(password),
+      },
+    });
+    const [primarySite, secondarySite] = await Promise.all([
+      prisma.site.create({ data: { key: "content-admin-primary", name: "Content Admin Primary" } }),
+      prisma.site.create({
+        data: { key: "content-admin-secondary", name: "Content Admin Secondary" },
+      }),
+    ]);
+    const [primaryLocale, secondaryLocale] = await Promise.all([
+      prisma.locale.create({
+        data: { code: "pt-BR", isDefault: true, siteId: primarySite.id },
+      }),
+      prisma.locale.create({
+        data: { code: "en-US", isDefault: true, siteId: secondarySite.id },
+      }),
+    ]);
+    await Promise.all([
+      prisma.siteRoleAssignment.create({
+        data: { roleKey: "editor", siteId: primarySite.id, userId: editor.id },
+      }),
+      prisma.siteRoleAssignment.create({
+        data: { roleKey: "viewer", siteId: secondarySite.id, userId: editor.id },
+      }),
+    ]);
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ContentEntriesController, ContentTypesController, IdentityController],
+      providers: [
+        ContentAdminService,
+        ContentFieldValidator,
+        IdentityService,
+        Reflector,
+        SessionAuthenticationGuard,
+        SessionCsrfGuard,
+        SiteAccessService,
+        SiteAuthorizationGuard,
+        { provide: PRISMA_CLIENT, useValue: prisma },
+        {
+          provide: IDENTITY_CONFIGURATION,
+          useValue: {
+            secureCookies: true,
+            sessionRotationIntervalMs: 15 * 60 * 1_000,
+            sessionTtlMs: 8 * 60 * 60 * 1_000,
+          },
+        },
+      ],
+    }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    configureHttpSecurity(app);
+    await app.init();
+
+    try {
+      const login = await request(app.getHttpServer())
+        .post("/auth/login")
+        .send({ email: editor.email, password })
+        .expect(200);
+      const cookies = login.headers["set-cookie"] as unknown as string[];
+      const cookie = cookies[0]?.split(";", 1)[0] ?? "";
+      const csrfToken = login.body.csrfToken as string;
+
+      await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-types`)
+        .set("Cookie", cookie)
+        .send({ displayName: "Article", fields: [], key: "article" })
+        .expect(403);
+
+      const createdType = await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-types`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          displayName: "Article",
+          fields: [
+            {
+              config: { maxLength: 120, minLength: 1 },
+              fieldType: "text",
+              key: "title",
+              label: "Title",
+              required: true,
+            },
+          ],
+          key: "article",
+        })
+        .expect(201);
+      expect(createdType.headers["cache-control"]).toBe("no-store");
+      expect(createdType.body).toMatchObject({ key: "article", schemaVersion: 1 });
+
+      await request(app.getHttpServer())
+        .post(`/sites/${secondarySite.id}/content-types`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({ displayName: "Forbidden", fields: [], key: "forbidden" })
+        .expect(403);
+
+      const types = await request(app.getHttpServer())
+        .get(`/sites/${primarySite.id}/content-types?limit=1`)
+        .set("Cookie", cookie)
+        .expect(200);
+      expect(types.body.items).toEqual([
+        expect.objectContaining({ id: createdType.body.id, key: "article" }),
+      ]);
+
+      const updatedType = await request(app.getHttpServer())
+        .put(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          displayName: "Article",
+          fields: [
+            {
+              config: { maxLength: 120, minLength: 1 },
+              fieldType: "text",
+              key: "title",
+              label: "Title",
+              required: true,
+            },
+            { fieldType: "textarea", key: "summary", label: "Summary" },
+          ],
+        })
+        .expect(200);
+      expect(updatedType.body).toMatchObject({ schemaVersion: 2 });
+
+      await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-entries`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          contentTypeId: createdType.body.id,
+          locales: [{ data: { title: 42 }, localeId: primaryLocale.id }],
+        })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-entries`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          contentTypeId: createdType.body.id,
+          locales: [{ data: { title: "Wrong locale" }, localeId: secondaryLocale.id }],
+        })
+        .expect(400);
+
+      const submittedTitle = "Administrative content";
+      const createdEntry = await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-entries`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          contentTypeId: createdType.body.id,
+          locales: [{ data: { title: submittedTitle }, localeId: primaryLocale.id }],
+        })
+        .expect(201);
+      expect(createdEntry.body).toMatchObject({ revision: 1, schemaVersion: 2 });
+
+      await request(app.getHttpServer())
+        .get(`/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .expect(404);
+
+      const updatedEntry = await request(app.getHttpServer())
+        .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({
+          locales: [
+            {
+              data: { summary: "Updated summary", title: submittedTitle },
+              localeId: primaryLocale.id,
+            },
+          ],
+        })
+        .expect(200);
+      expect(updatedEntry.body).toMatchObject({ revision: 2, schemaVersion: 2 });
+
+      await request(app.getHttpServer())
+        .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .expect(409);
+      await request(app.getHttpServer())
+        .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .expect(204);
+      await request(app.getHttpServer())
+        .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .expect(204);
+
+      const auditEvents = await prisma.auditEvent.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { action: true, metadata: true },
+        where: { actorId: editor.id, metadata: { path: ["siteId"], equals: primarySite.id } },
+      });
+      expect(auditEvents.map(({ action }) => action)).toEqual([
+        "content.type.created",
+        "content.type.updated",
+        "content.entry.created",
+        "content.entry.updated",
+        "content.entry.deleted",
+        "content.type.deleted",
+      ]);
+      expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
+    } finally {
+      await app.close();
+      await prisma.$disconnect();
     }
   }, 120_000);
 

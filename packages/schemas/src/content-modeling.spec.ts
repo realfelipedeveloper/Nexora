@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   contentLocaleDataSchema,
+  contentEntryCreateSchema,
   contentSchemaVersionSchema,
+  contentTypeCreateSchema,
   contentTypeKeySchema,
   contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
@@ -94,6 +96,33 @@ describe("content modeling contracts", () => {
         fieldType: "select",
         key: "kind",
         label: "Kind",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates strict administrative content commands", () => {
+    const localeId = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
+    expect(
+      contentTypeCreateSchema.safeParse({
+        displayName: "Article",
+        fields: [{ fieldType: "text", key: "title", label: "Title" }],
+        key: "article",
+      }).success,
+    ).toBe(true);
+    expect(
+      contentEntryCreateSchema.safeParse({
+        contentTypeId: "a11f740b-f15f-4279-8ca2-3877a4cae775",
+        locales: [
+          { data: { title: "First" }, localeId },
+          { data: { title: "Duplicate" }, localeId },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      contentEntryCreateSchema.safeParse({
+        contentTypeId: "not-a-uuid",
+        locales: [],
+        unexpected: true,
       }).success,
     ).toBe(false);
   });

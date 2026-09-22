@@ -188,25 +188,75 @@ export const fieldDefinitionSchema = z
     }
   });
 
-export const contentTypeSchemaDefinitionSchema = z
-  .strictObject({
-    displayName: z.string().trim().min(1).max(120),
-    fields: z.array(fieldDefinitionSchema).max(100),
-    key: contentTypeKeySchema,
-    version: contentSchemaVersionSchema,
-  })
-  .superRefine((definition, context) => {
+const contentTypeFieldsSchema = z
+  .array(fieldDefinitionSchema)
+  .max(100)
+  .superRefine((fields, context) => {
     const seenKeys = new Set<string>();
-    for (const [index, field] of definition.fields.entries()) {
+    for (const [index, field] of fields.entries()) {
       if (seenKeys.has(field.key)) {
         context.addIssue({
           code: "custom",
-          message: "Field keys must be unique within a schema version.",
-          path: ["fields", index, "key"],
+          message: "Field keys must be unique within a content type.",
+          path: [index, "key"],
         });
       }
       seenKeys.add(field.key);
     }
   });
 
+export const contentTypeCreateSchema = z.strictObject({
+  displayName: z.string().trim().min(1).max(120),
+  fields: contentTypeFieldsSchema,
+  key: contentTypeKeySchema,
+});
+
+export const contentTypeUpdateSchema = z.strictObject({
+  displayName: z.string().trim().min(1).max(120),
+  fields: contentTypeFieldsSchema,
+});
+
+export const contentTypeSchemaDefinitionSchema = z.strictObject({
+  displayName: z.string().trim().min(1).max(120),
+  fields: contentTypeFieldsSchema,
+  key: contentTypeKeySchema,
+  version: contentSchemaVersionSchema,
+});
+
+const contentLocaleWriteSchema = z.strictObject({
+  data: contentLocaleDataSchema,
+  localeId: z.string().uuid(),
+});
+
+const contentLocaleWritesSchema = z
+  .array(contentLocaleWriteSchema)
+  .min(1)
+  .max(20)
+  .superRefine((locales, context) => {
+    const seenLocaleIds = new Set<string>();
+    for (const [index, locale] of locales.entries()) {
+      if (seenLocaleIds.has(locale.localeId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Each locale may occur only once per entry.",
+          path: [index, "localeId"],
+        });
+      }
+      seenLocaleIds.add(locale.localeId);
+    }
+  });
+
+export const contentEntryCreateSchema = z.strictObject({
+  contentTypeId: z.string().uuid(),
+  locales: contentLocaleWritesSchema,
+});
+
+export const contentEntryUpdateSchema = z.strictObject({
+  locales: contentLocaleWritesSchema,
+});
+
 export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>;
+export type ContentTypeCreateInput = z.infer<typeof contentTypeCreateSchema>;
+export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
+export type ContentEntryCreateInput = z.infer<typeof contentEntryCreateSchema>;
+export type ContentEntryUpdateInput = z.infer<typeof contentEntryUpdateSchema>;
