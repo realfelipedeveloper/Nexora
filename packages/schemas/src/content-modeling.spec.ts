@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   contentLocaleDataSchema,
   contentEntryCreateSchema,
+  contentEntryStatusUpdateSchema,
   contentSchemaVersionSchema,
   contentTypeCreateSchema,
   contentTypeKeySchema,
@@ -124,6 +125,20 @@ describe("content modeling contracts", () => {
         locales: [],
         unexpected: true,
       }).success,
+    ).toBe(false);
+  });
+
+  it("accepts only the minimal editorial states", () => {
+    expect(contentEntryStatusUpdateSchema.parse({ status: "DRAFT" })).toEqual({
+      status: "DRAFT",
+    });
+    expect(contentEntryStatusUpdateSchema.parse({ status: "PUBLISHED" })).toEqual({
+      status: "PUBLISHED",
+    });
+    expect(contentEntryStatusUpdateSchema.safeParse({ status: "SCHEDULED" }).success).toBe(false);
+    expect(
+      contentEntryStatusUpdateSchema.safeParse({ reason: "not persisted", status: "DRAFT" })
+        .success,
     ).toBe(false);
   });
 });

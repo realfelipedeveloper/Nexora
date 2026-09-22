@@ -19,6 +19,7 @@ import {
 } from "./content/content-admin.controller.js";
 import { ContentAdminService } from "./content/content-admin.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
+import { ContentMetrics } from "./content/content-metrics.js";
 import { configureHttpSecurity } from "./http-security.js";
 import {
   AdminAlreadyProvisionedError,
@@ -50,6 +51,7 @@ const execFileAsync = promisify(execFile);
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const migrationsRoot = path.join(workspaceRoot, "services", "core-api", "prisma", "migrations");
 const contentSchemaVersioningMigration = "20260917180000_content_schema_versioning";
+const contentEditorialStateMigration = "20260922143000_content_entry_editorial_state";
 
 async function applyMigrationsBeforeContentSchemaVersioning(connectionString: string) {
   const client = new Client({ connectionString });
@@ -76,6 +78,21 @@ async function applyContentSchemaVersioningMigration(connectionString: string) {
   const client = new Client({ connectionString });
   const migration = await readFile(
     path.join(migrationsRoot, contentSchemaVersioningMigration, "migration.sql"),
+    "utf8",
+  );
+
+  await client.connect();
+  try {
+    await client.query(migration);
+  } finally {
+    await client.end();
+  }
+}
+
+async function applyContentEditorialStateMigration(connectionString: string) {
+  const client = new Client({ connectionString });
+  const migration = await readFile(
+    path.join(migrationsRoot, contentEditorialStateMigration, "migration.sql"),
     "utf8",
   );
 
@@ -412,7 +429,25 @@ describe("PostgreSQL migrations and integration", () => {
       const entry = await prisma.contentEntry.create({
         data: { contentTypeId: firstType.id, siteId: firstSite.id },
       });
-      expect(entry).toMatchObject({ revision: 1, schemaVersion: 1, siteId: firstSite.id });
+      expect(entry).toMatchObject({
+        publishedAt: null,
+        revision: 1,
+        schemaVersion: 1,
+        siteId: firstSite.id,
+        status: "DRAFT",
+      });
+      await expect(
+        prisma.contentEntry.update({
+          data: { status: "PUBLISHED" },
+          where: { id: entry.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.contentEntry.update({
+          data: { publishedAt: new Date() },
+          where: { id: entry.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
 
       const contentLocale = await prisma.contentLocale.create({
         data: {
@@ -517,7 +552,7 @@ describe("PostgreSQL migrations and integration", () => {
     }
   }, 120_000);
 
-  it("backfills immutable schema versions without changing legacy entries", async () => {
+  it("backfills schema versions and editorial defaults without changing legacy entries", async () => {
     const legacyPostgres = await new PostgreSqlContainer("postgres:17-alpine")
       .withDatabase("nexora_legacy")
       .withUsername("nexora")
@@ -550,9 +585,14 @@ describe("PostgreSQL migrations and integration", () => {
           label: "Title",
         },
       });
-      const entry = await prisma.contentEntry.create({
-        data: { contentTypeId: contentType.id, siteId: site.id },
-      });
+      const entry = { id: "legacy-content-entry" };
+      await prisma.$executeRaw`
+        INSERT INTO "ContentEntry" (
+          "id", "siteId", "contentTypeId", "schemaVersion", "revision", "createdAt", "updatedAt"
+        ) VALUES (
+          ${entry.id}, ${site.id}, ${contentType.id}, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `;
       const legacyData = { title: "Preserved content" };
       await prisma.contentLocale.create({
         data: {
@@ -564,6 +604,7 @@ describe("PostgreSQL migrations and integration", () => {
       });
 
       await applyContentSchemaVersioningMigration(connectionString);
+      await applyContentEditorialStateMigration(connectionString);
 
       await expect(
         prisma.contentEntry.findUniqueOrThrow({
@@ -580,7 +621,9 @@ describe("PostgreSQL migrations and integration", () => {
           },
           version: 1,
         },
+        publishedAt: null,
         schemaVersion: 1,
+        status: "DRAFT",
       });
     } finally {
       await prisma.$disconnect();
@@ -591,14 +634,25 @@ describe("PostgreSQL migrations and integration", () => {
   it("enforces multi-site administrative content CRUD with audit metadata", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
     const password = "content administration integration password";
-    const editor = await prisma.user.create({
-      data: {
-        displayName: "Content Editor",
-        email: "content.editor@example.com",
-        normalizedEmail: "content.editor@example.com",
-        passwordHash: await hashPassword(password),
-      },
-    });
+    const passwordHash = await hashPassword(password);
+    const [editor, publisher] = await Promise.all([
+      prisma.user.create({
+        data: {
+          displayName: "Content Editor",
+          email: "content.editor@example.com",
+          normalizedEmail: "content.editor@example.com",
+          passwordHash,
+        },
+      }),
+      prisma.user.create({
+        data: {
+          displayName: "Content Publisher",
+          email: "content.publisher@example.com",
+          normalizedEmail: "content.publisher@example.com",
+          passwordHash,
+        },
+      }),
+    ]);
     const [primarySite, secondarySite] = await Promise.all([
       prisma.site.create({ data: { key: "content-admin-primary", name: "Content Admin Primary" } }),
       prisma.site.create({
@@ -620,6 +674,9 @@ describe("PostgreSQL migrations and integration", () => {
       prisma.siteRoleAssignment.create({
         data: { roleKey: "viewer", siteId: secondarySite.id, userId: editor.id },
       }),
+      prisma.siteRoleAssignment.create({
+        data: { roleKey: "publisher", siteId: primarySite.id, userId: publisher.id },
+      }),
     ]);
 
     const moduleRef = await Test.createTestingModule({
@@ -627,6 +684,7 @@ describe("PostgreSQL migrations and integration", () => {
       providers: [
         ContentAdminService,
         ContentFieldValidator,
+        ContentMetrics,
         IdentityService,
         Reflector,
         SessionAuthenticationGuard,
@@ -649,13 +707,19 @@ describe("PostgreSQL migrations and integration", () => {
     await app.init();
 
     try {
-      const login = await request(app.getHttpServer())
-        .post("/auth/login")
-        .send({ email: editor.email, password })
-        .expect(200);
-      const cookies = login.headers["set-cookie"] as unknown as string[];
-      const cookie = cookies[0]?.split(";", 1)[0] ?? "";
-      const csrfToken = login.body.csrfToken as string;
+      const loginAs = async (email: string) => {
+        const login = await request(app.getHttpServer())
+          .post("/auth/login")
+          .send({ email, password })
+          .expect(200);
+        const cookies = login.headers["set-cookie"] as unknown as string[];
+        return {
+          cookie: cookies[0]?.split(";", 1)[0] ?? "",
+          csrfToken: login.body.csrfToken as string,
+        };
+      };
+      const { cookie, csrfToken } = await loginAs(editor.email);
+      const publisherSession = await loginAs(publisher.email);
 
       await request(app.getHttpServer())
         .post(`/sites/${primarySite.id}/content-types`)
@@ -682,6 +746,7 @@ describe("PostgreSQL migrations and integration", () => {
         })
         .expect(201);
       expect(createdType.headers["cache-control"]).toBe("no-store");
+      expect(createdType.headers.etag).toBe('"1"');
       expect(createdType.body).toMatchObject({ key: "article", schemaVersion: 1 });
 
       await request(app.getHttpServer())
@@ -699,25 +764,55 @@ describe("PostgreSQL migrations and integration", () => {
         expect.objectContaining({ id: createdType.body.id, key: "article" }),
       ]);
 
-      const updatedType = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .put(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
+        .send({ displayName: "Missing precondition", fields: [] })
+        .expect(428);
+
+      const typeCommand = {
+        displayName: "Article",
+        fields: [
+          {
+            config: { maxLength: 120, minLength: 1 },
+            fieldType: "text",
+            key: "title",
+            label: "Title",
+            required: true,
+          },
+          { fieldType: "textarea", key: "summary", label: "Summary" },
+        ],
+      };
+      const concurrentTypeWrites = await Promise.all([
+        request(app.getHttpServer())
+          .put(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+          .set("Cookie", cookie)
+          .set("x-csrf-token", csrfToken)
+          .set("If-Match", '"1"')
+          .send(typeCommand),
+        request(app.getHttpServer())
+          .put(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+          .set("Cookie", cookie)
+          .set("x-csrf-token", csrfToken)
+          .set("If-Match", '"1"')
+          .send(typeCommand),
+      ]);
+      expect(concurrentTypeWrites.map(({ status }) => status).sort()).toEqual([200, 412]);
+      const updatedType = concurrentTypeWrites.find(({ status }) => status === 200);
+      expect(updatedType?.headers.etag).toBe('"2"');
+      expect(updatedType?.body).toMatchObject({ schemaVersion: 2 });
+
+      await request(app.getHttpServer())
+        .put(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"1"')
         .send({
           displayName: "Article",
-          fields: [
-            {
-              config: { maxLength: 120, minLength: 1 },
-              fieldType: "text",
-              key: "title",
-              label: "Title",
-              required: true,
-            },
-            { fieldType: "textarea", key: "summary", label: "Summary" },
-          ],
+          fields: [],
         })
-        .expect(200);
-      expect(updatedType.body).toMatchObject({ schemaVersion: 2 });
+        .expect(412);
 
       await request(app.getHttpServer())
         .post(`/sites/${primarySite.id}/content-entries`)
@@ -748,58 +843,199 @@ describe("PostgreSQL migrations and integration", () => {
           locales: [{ data: { title: submittedTitle }, localeId: primaryLocale.id }],
         })
         .expect(201);
-      expect(createdEntry.body).toMatchObject({ revision: 1, schemaVersion: 2 });
+      expect(createdEntry.headers.etag).toBe('"1"');
+      expect(createdEntry.body).toMatchObject({
+        publishedAt: null,
+        revision: 1,
+        schemaVersion: 2,
+        status: "DRAFT",
+      });
 
       await request(app.getHttpServer())
         .get(`/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .expect(404);
 
-      const updatedEntry = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .send({
-          locales: [
-            {
-              data: { summary: "Updated summary", title: submittedTitle },
-              localeId: primaryLocale.id,
-            },
-          ],
-        })
+        .send({ locales: [] })
+        .expect(428);
+
+      const entryCommand = {
+        locales: [
+          {
+            data: { summary: "Updated summary", title: submittedTitle },
+            localeId: primaryLocale.id,
+          },
+        ],
+      };
+      const concurrentEntryWrites = await Promise.all([
+        request(app.getHttpServer())
+          .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+          .set("Cookie", cookie)
+          .set("x-csrf-token", csrfToken)
+          .set("If-Match", '"1"')
+          .send(entryCommand),
+        request(app.getHttpServer())
+          .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+          .set("Cookie", cookie)
+          .set("x-csrf-token", csrfToken)
+          .set("If-Match", '"1"')
+          .send(entryCommand),
+      ]);
+      expect(concurrentEntryWrites.map(({ status }) => status).sort()).toEqual([200, 412]);
+      const updatedEntry = concurrentEntryWrites.find(({ status }) => status === 200);
+      expect(updatedEntry?.headers.etag).toBe('"2"');
+      expect(updatedEntry?.body).toMatchObject({ revision: 2, schemaVersion: 2 });
+
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "PUBLISHED" })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "SCHEDULED" })
+        .expect(400);
+
+      const published = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "PUBLISHED" })
         .expect(200);
-      expect(updatedEntry.body).toMatchObject({ revision: 2, schemaVersion: 2 });
+      expect(published.headers.etag).toBe('"3"');
+      expect(published.body).toMatchObject({ revision: 3, status: "PUBLISHED" });
+      expect(published.body.publishedAt).toEqual(expect.any(String));
+
+      const repeatedPublish = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "PUBLISHED" })
+        .expect(200);
+      expect(repeatedPublish.headers.etag).toBe('"3"');
+      expect(repeatedPublish.body).toMatchObject({
+        publishedAt: published.body.publishedAt,
+        revision: 3,
+        status: "PUBLISHED",
+      });
+
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "DRAFT" })
+        .expect(412);
+
+      await request(app.getHttpServer())
+        .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"3"')
+        .send(entryCommand)
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"3"')
+        .expect(409);
+
+      const unpublished = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "DRAFT" })
+        .expect(200);
+      expect(unpublished.headers.etag).toBe('"4"');
+      expect(unpublished.body).toMatchObject({
+        publishedAt: null,
+        revision: 4,
+        status: "DRAFT",
+      });
+
+      await request(app.getHttpServer())
+        .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", cookie)
+        .expect(200)
+        .expect("ETag", '"4"');
 
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"2"')
         .expect(409);
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"4"')
         .expect(204);
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"2"')
         .expect(204);
 
       const auditEvents = await prisma.auditEvent.findMany({
         orderBy: { createdAt: "asc" },
-        select: { action: true, metadata: true },
-        where: { actorId: editor.id, metadata: { path: ["siteId"], equals: primarySite.id } },
+        select: { action: true, actorId: true, metadata: true },
+        where: {
+          action: {
+            in: [
+              "content.type.created",
+              "content.type.updated",
+              "content.entry.created",
+              "content.entry.updated",
+              "content.entry.status.changed",
+              "content.entry.deleted",
+              "content.type.deleted",
+            ],
+          },
+          metadata: { path: ["siteId"], equals: primarySite.id },
+        },
       });
       expect(auditEvents.map(({ action }) => action)).toEqual([
         "content.type.created",
         "content.type.updated",
         "content.entry.created",
         "content.entry.updated",
+        "content.entry.status.changed",
+        "content.entry.status.changed",
         "content.entry.deleted",
         "content.type.deleted",
       ]);
+      expect(
+        auditEvents
+          .filter(({ action }) => action === "content.entry.status.changed")
+          .map(({ actorId }) => actorId),
+      ).toEqual([publisher.id, publisher.id]);
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
+
+      const metrics = moduleRef.get(ContentMetrics).render();
+      expect(metrics).toContain("nexora_content_precondition_failures_total 4");
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="DRAFT",to="PUBLISHED"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="PUBLISHED",to="DRAFT"} 1',
+      );
     } finally {
       await app.close();
       await prisma.$disconnect();
@@ -873,31 +1109,38 @@ describe("PostgreSQL migrations and integration", () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
 
     try {
-      const attempts = await Promise.allSettled([
-        provisionInitialAdmin(prisma, {
-          displayName: "First Admin",
-          email: "first@example.com",
-          password: "first secure administrator password",
-        }),
-        provisionInitialAdmin(prisma, {
-          displayName: "Second Admin",
-          email: "second@example.com",
-          password: "second secure administrator password",
-        }),
-      ]);
-
-      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
-      const rejection = attempts.find((attempt) => attempt.status === "rejected");
-      expect(rejection).toBeDefined();
-      expect((rejection as PromiseRejectedResult).reason).toBeInstanceOf(
-        AdminAlreadyProvisionedError,
-      );
-      await expect(prisma.user.count({ where: { isSystemAdmin: true } })).resolves.toBe(1);
-      await expect(
-        prisma.auditEvent.count({
+      for (let round = 0; round < 5; round += 1) {
+        await prisma.auditEvent.deleteMany({
           where: { action: "identity.system_admin.provisioned" },
-        }),
-      ).resolves.toBe(1);
+        });
+        await prisma.user.deleteMany({ where: { isSystemAdmin: true } });
+
+        const attempts = await Promise.allSettled([
+          provisionInitialAdmin(prisma, {
+            displayName: "First Admin",
+            email: `first-${round}@example.com`,
+            password: "first secure administrator password",
+          }),
+          provisionInitialAdmin(prisma, {
+            displayName: "Second Admin",
+            email: `second-${round}@example.com`,
+            password: "second secure administrator password",
+          }),
+        ]);
+
+        expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+        const rejection = attempts.find((attempt) => attempt.status === "rejected");
+        expect(rejection).toBeDefined();
+        expect((rejection as PromiseRejectedResult).reason).toBeInstanceOf(
+          AdminAlreadyProvisionedError,
+        );
+        await expect(prisma.user.count({ where: { isSystemAdmin: true } })).resolves.toBe(1);
+        await expect(
+          prisma.auditEvent.count({
+            where: { action: "identity.system_admin.provisioned" },
+          }),
+        ).resolves.toBe(1);
+      }
     } finally {
       await prisma.$disconnect();
     }

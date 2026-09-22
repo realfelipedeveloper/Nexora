@@ -2,20 +2,22 @@ import { Inject, Injectable } from "@nestjs/common";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import {
   contentEntryCreateSchema,
+  contentEntryStatusUpdateSchema,
   contentEntryUpdateSchema,
   contentTypeCreateSchema,
   contentTypeUpdateSchema,
   type ContentEntryCreateInput,
+  type ContentEntryStatusUpdateInput,
   type ContentEntryUpdateInput,
   type ContentTypeCreateInput,
   type ContentTypeUpdateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
+import { ContentMetrics } from "./content-metrics.js";
 
 const defaultPageSize = 25;
 const maximumPageSize = 100;
-const maximumTransactionAttempts = 3;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const fieldSelection = {
@@ -66,8 +68,10 @@ const contentEntrySummarySelection = {
   contentTypeId: true,
   createdAt: true,
   id: true,
+  publishedAt: true,
   revision: true,
   schemaVersion: true,
+  status: true,
   updatedAt: true,
 } as const;
 
@@ -142,6 +146,22 @@ export class ContentEntryNotFoundError extends Error {
   }
 }
 
+export class ContentPreconditionFailedError extends Error {
+  override readonly name = "ContentPreconditionFailedError";
+
+  constructor() {
+    super("Content version precondition failed.");
+  }
+}
+
+export class ContentEntryStateConflictError extends Error {
+  override readonly name = "ContentEntryStateConflictError";
+
+  constructor() {
+    super("Published content must be returned to draft before it can be changed.");
+  }
+}
+
 function isPrismaError(error: unknown, code: string) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
@@ -193,6 +213,14 @@ function parseContentEntryUpdate(input: unknown): ContentEntryUpdateInput {
   return result.data;
 }
 
+function parseContentEntryStatusUpdate(input: unknown): ContentEntryStatusUpdateInput {
+  const result = contentEntryStatusUpdateSchema.safeParse(input);
+  if (!result.success) {
+    throw new InvalidContentInputError();
+  }
+  return result.data;
+}
+
 function asJsonValue(value: unknown) {
   return value as Prisma.InputJsonValue;
 }
@@ -226,6 +254,7 @@ export class ContentAdminService {
   constructor(
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentFieldValidator) private readonly validator: ContentFieldValidator,
+    @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
   ) {}
 
   async listContentTypes(siteId: string, input: ContentPageInput) {
@@ -306,71 +335,74 @@ export class ContentAdminService {
     }
   }
 
-  async updateContentType(actorId: string, siteId: string, contentTypeId: string, input: unknown) {
+  async updateContentType(
+    actorId: string,
+    siteId: string,
+    contentTypeId: string,
+    expectedVersion: number,
+    input: unknown,
+  ) {
     const command = parseContentTypeUpdate(input);
 
-    const updateWithRetry = async (attempt: number): Promise<unknown> => {
-      try {
-        return await this.prisma.$transaction(
-          async (transaction) => {
-            const current = await transaction.contentType.findUnique({
-              select: { id: true, key: true, schemaVersion: true },
-              where: { id_siteId: { id: contentTypeId, siteId } },
-            });
-            if (!current) {
-              throw new ContentTypeNotFoundError();
-            }
-            const version = current.schemaVersion + 1;
-            const definition = schemaDefinition(current.key, version, command);
-
-            await transaction.fieldDefinition.deleteMany({ where: { contentTypeId } });
-            const contentType = await transaction.contentType.update({
-              data: {
-                displayName: command.displayName,
-                fields: { create: fieldWrites(command.fields) },
-                schemaVersion: version,
-              },
-              select: contentTypeDetailSelection,
-              where: { id_siteId: { id: contentTypeId, siteId } },
-            });
-            await transaction.contentTypeSchemaVersion.create({
-              data: {
-                contentTypeId,
-                definition: asJsonValue(definition),
-                siteId,
-                version,
-              },
-            });
-            await transaction.auditEvent.create({
-              data: {
-                action: "content.type.updated",
-                actorId,
-                entity: "ContentType",
-                entityId: contentTypeId,
-                metadata: {
-                  fieldCount: command.fields.length,
-                  previousVersion: current.schemaVersion,
-                  siteId,
-                  version,
-                },
-              },
-            });
-            return contentType;
-          },
-          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-        );
-      } catch (error) {
-        if (isPrismaError(error, "P2034") && attempt < maximumTransactionAttempts) {
-          return updateWithRetry(attempt + 1);
-        }
-        throw error;
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.contentType.findUnique({
+        select: { id: true, key: true, schemaVersion: true },
+        where: { id_siteId: { id: contentTypeId, siteId } },
+      });
+      if (!current) {
+        throw new ContentTypeNotFoundError();
       }
-    };
+      if (current.schemaVersion !== expectedVersion) {
+        this.preconditionFailed();
+      }
+      const version = expectedVersion + 1;
+      const claimed = await transaction.contentType.updateMany({
+        data: { displayName: command.displayName, schemaVersion: version },
+        where: { id: contentTypeId, schemaVersion: expectedVersion, siteId },
+      });
+      if (claimed.count !== 1) {
+        this.preconditionFailed();
+      }
+      const definition = schemaDefinition(current.key, version, command);
 
-    return updateWithRetry(1);
+      await transaction.fieldDefinition.deleteMany({ where: { contentTypeId } });
+      const contentType = await transaction.contentType.update({
+        data: { fields: { create: fieldWrites(command.fields) } },
+        select: contentTypeDetailSelection,
+        where: { id_siteId: { id: contentTypeId, siteId } },
+      });
+      await transaction.contentTypeSchemaVersion.create({
+        data: {
+          contentTypeId,
+          definition: asJsonValue(definition),
+          siteId,
+          version,
+        },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          action: "content.type.updated",
+          actorId,
+          entity: "ContentType",
+          entityId: contentTypeId,
+          metadata: {
+            fieldCount: command.fields.length,
+            previousVersion: expectedVersion,
+            siteId,
+            version,
+          },
+        },
+      });
+      return contentType;
+    });
   }
 
-  async deleteContentType(actorId: string, siteId: string, contentTypeId: string) {
+  async deleteContentType(
+    actorId: string,
+    siteId: string,
+    contentTypeId: string,
+    expectedVersion: number,
+  ) {
     try {
       await this.prisma.$transaction(async (transaction) => {
         const current = await transaction.contentType.findUnique({
@@ -380,9 +412,15 @@ export class ContentAdminService {
         if (!current) {
           throw new ContentTypeNotFoundError();
         }
-        await transaction.contentType.delete({
-          where: { id_siteId: { id: contentTypeId, siteId } },
+        if (current.schemaVersion !== expectedVersion) {
+          this.preconditionFailed();
+        }
+        const deleted = await transaction.contentType.deleteMany({
+          where: { id: contentTypeId, schemaVersion: expectedVersion, siteId },
         });
+        if (deleted.count !== 1) {
+          this.preconditionFailed();
+        }
         await transaction.auditEvent.create({
           data: {
             action: "content.type.deleted",
@@ -500,17 +538,30 @@ export class ContentAdminService {
     actorId: string,
     siteId: string,
     contentEntryId: string,
+    expectedRevision: number,
     input: unknown,
   ) {
     const command = parseContentEntryUpdate(input);
 
     return this.prisma.$transaction(async (transaction) => {
       const current = await transaction.contentEntry.findUnique({
-        select: { contentTypeId: true, id: true, revision: true, schemaVersion: true },
+        select: {
+          contentTypeId: true,
+          id: true,
+          revision: true,
+          schemaVersion: true,
+          status: true,
+        },
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
       if (!current) {
         throw new ContentEntryNotFoundError();
+      }
+      if (current.revision !== expectedRevision) {
+        this.preconditionFailed();
+      }
+      if (current.status !== "DRAFT") {
+        throw new ContentEntryStateConflictError();
       }
       const schema = await transaction.contentTypeSchemaVersion.findUniqueOrThrow({
         where: {
@@ -527,6 +578,14 @@ export class ContentAdminService {
         data: asJsonValue(this.validator.validate(schema.definition, locale.data)),
         localeId: locale.localeId,
       }));
+
+      const claimed = await transaction.contentEntry.updateMany({
+        data: { revision: { increment: 1 } },
+        where: { id: contentEntryId, revision: expectedRevision, siteId, status: "DRAFT" },
+      });
+      if (claimed.count !== 1) {
+        this.preconditionFailed();
+      }
 
       await transaction.contentLocale.deleteMany({
         where: { contentEntryId, localeId: { notIn: localeIds }, siteId },
@@ -546,8 +605,7 @@ export class ContentAdminService {
           },
         });
       }
-      const entry = await transaction.contentEntry.update({
-        data: { revision: { increment: 1 } },
+      const entry = await transaction.contentEntry.findUniqueOrThrow({
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
@@ -559,7 +617,7 @@ export class ContentAdminService {
           entityId: contentEntryId,
           metadata: {
             localeCount: locales.length,
-            previousRevision: current.revision,
+            previousRevision: expectedRevision,
             revision: entry.revision,
             schemaVersion: current.schemaVersion,
             siteId,
@@ -570,18 +628,106 @@ export class ContentAdminService {
     });
   }
 
-  async deleteContentEntry(actorId: string, siteId: string, contentEntryId: string) {
-    await this.prisma.$transaction(async (transaction) => {
+  async updateContentEntryStatus(
+    actorId: string,
+    siteId: string,
+    contentEntryId: string,
+    expectedRevision: number,
+    input: unknown,
+  ) {
+    const command = parseContentEntryStatusUpdate(input);
+    let transition: { from: "DRAFT" | "PUBLISHED"; to: "DRAFT" | "PUBLISHED" } | undefined;
+
+    const result = await this.prisma.$transaction(async (transaction) => {
       const current = await transaction.contentEntry.findUnique({
-        select: { contentTypeId: true, id: true, revision: true, schemaVersion: true },
+        select: { id: true, revision: true, status: true },
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
       if (!current) {
         throw new ContentEntryNotFoundError();
       }
-      await transaction.contentEntry.delete({
+      if (current.revision !== expectedRevision) {
+        this.preconditionFailed();
+      }
+      if (current.status === command.status) {
+        return transaction.contentEntry.findUniqueOrThrow({
+          select: contentEntryDetailSelection,
+          where: { id_siteId: { id: contentEntryId, siteId } },
+        });
+      }
+
+      const revision = expectedRevision + 1;
+      const changed = await transaction.contentEntry.updateMany({
+        data: {
+          publishedAt: command.status === "PUBLISHED" ? new Date() : null,
+          revision,
+          status: command.status,
+        },
+        where: { id: contentEntryId, revision: expectedRevision, siteId },
+      });
+      if (changed.count !== 1) {
+        this.preconditionFailed();
+      }
+      const entry = await transaction.contentEntry.findUniqueOrThrow({
+        select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
+      await transaction.auditEvent.create({
+        data: {
+          action: "content.entry.status.changed",
+          actorId,
+          entity: "ContentEntry",
+          entityId: contentEntryId,
+          metadata: {
+            from: current.status,
+            previousRevision: expectedRevision,
+            revision,
+            siteId,
+            to: entry.status,
+          },
+        },
+      });
+      transition = { from: current.status, to: entry.status };
+      return entry;
+    });
+    if (transition) {
+      this.metrics.recordStateTransition(transition.from, transition.to);
+    }
+    return result;
+  }
+
+  async deleteContentEntry(
+    actorId: string,
+    siteId: string,
+    contentEntryId: string,
+    expectedRevision: number,
+  ) {
+    await this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.contentEntry.findUnique({
+        select: {
+          contentTypeId: true,
+          id: true,
+          revision: true,
+          schemaVersion: true,
+          status: true,
+        },
+        where: { id_siteId: { id: contentEntryId, siteId } },
+      });
+      if (!current) {
+        throw new ContentEntryNotFoundError();
+      }
+      if (current.revision !== expectedRevision) {
+        this.preconditionFailed();
+      }
+      if (current.status !== "DRAFT") {
+        throw new ContentEntryStateConflictError();
+      }
+      const deleted = await transaction.contentEntry.deleteMany({
+        where: { id: contentEntryId, revision: expectedRevision, siteId, status: "DRAFT" },
+      });
+      if (deleted.count !== 1) {
+        this.preconditionFailed();
+      }
       await transaction.auditEvent.create({
         data: {
           action: "content.entry.deleted",
@@ -610,5 +756,10 @@ export class ContentAdminService {
     if (localeCount !== localeIds.length) {
       throw new InvalidContentInputError();
     }
+  }
+
+  private preconditionFailed(): never {
+    this.metrics.recordPreconditionFailure();
+    throw new ContentPreconditionFailedError();
   }
 }
