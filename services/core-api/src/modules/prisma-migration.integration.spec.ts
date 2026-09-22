@@ -20,6 +20,8 @@ import {
 import { ContentAdminService } from "./content/content-admin.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
+import { PublicContentController } from "./content/content-public.controller.js";
+import { PublicContentService } from "./content/content-public.service.js";
 import { configureHttpSecurity } from "./http-security.js";
 import {
   AdminAlreadyProvisionedError,
@@ -218,6 +220,23 @@ describe("PostgreSQL migrations and integration", () => {
       "Session_expiry_after_creation_check",
       "Session_userId_fkey",
     ]);
+
+    const publicContentIndex = await postgres.exec([
+      "sh",
+      "-lc",
+      [
+        "PGPASSWORD=nexora_test_password",
+        "psql",
+        "-U nexora",
+        "-d nexora_test",
+        "-tAc",
+        `"SELECT indexname FROM pg_indexes WHERE indexname = 'ContentEntry_siteId_contentTypeId_status_publishedAt_id_idx';"`,
+      ].join(" "),
+    ]);
+    expect(publicContentIndex.exitCode).toBe(0);
+    expect(publicContentIndex.output.trim()).toBe(
+      "ContentEntry_siteId_contentTypeId_status_publishedAt_id_idx",
+    );
 
     const insertUser = await postgres.exec([
       "sh",
@@ -680,11 +699,17 @@ describe("PostgreSQL migrations and integration", () => {
     ]);
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ContentEntriesController, ContentTypesController, IdentityController],
+      controllers: [
+        ContentEntriesController,
+        ContentTypesController,
+        IdentityController,
+        PublicContentController,
+      ],
       providers: [
         ContentAdminService,
         ContentFieldValidator,
         ContentMetrics,
+        PublicContentService,
         IdentityService,
         Reflector,
         SessionAuthenticationGuard,
@@ -852,6 +877,16 @@ describe("PostgreSQL migrations and integration", () => {
       });
 
       await request(app.getHttpServer())
+        .get(
+          `/public/sites/${primarySite.key}/content/article/${createdEntry.body.id as string}?locale=pt-BR`,
+        )
+        .expect(404);
+      const draftCollection = await request(app.getHttpServer())
+        .get(`/public/sites/${primarySite.key}/content/article?locale=pt-BR`)
+        .expect(200);
+      expect(draftCollection.body).toEqual({ items: [], nextCursor: null });
+
+      await request(app.getHttpServer())
         .get(`/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .expect(404);
@@ -917,6 +952,49 @@ describe("PostgreSQL migrations and integration", () => {
       expect(published.body).toMatchObject({ revision: 3, status: "PUBLISHED" });
       expect(published.body.publishedAt).toEqual(expect.any(String));
 
+      const publicDetail = await request(app.getHttpServer())
+        .get(
+          `/public/sites/${primarySite.key}/content/article/${createdEntry.body.id as string}?locale=pt-BR`,
+        )
+        .expect(200);
+      expect(publicDetail.headers["cache-control"]).toBe(
+        "public, max-age=60, s-maxage=300, stale-while-revalidate=60",
+      );
+      expect(publicDetail.headers.etag).toMatch(/^"sha256-[A-Za-z0-9_-]+"$/u);
+      expect(publicDetail.body).toEqual({
+        contentType: { key: "article" },
+        data: { summary: "Updated summary", title: submittedTitle },
+        id: createdEntry.body.id,
+        locale: "pt-BR",
+        publishedAt: published.body.publishedAt,
+        schemaVersion: 2,
+        updatedAt: expect.any(String),
+      });
+      expect(publicDetail.body).not.toHaveProperty("contentTypeId");
+      expect(publicDetail.body).not.toHaveProperty("localeId");
+      expect(publicDetail.body).not.toHaveProperty("revision");
+      expect(publicDetail.body).not.toHaveProperty("siteId");
+      expect(publicDetail.body).not.toHaveProperty("status");
+
+      await request(app.getHttpServer())
+        .get(
+          `/public/sites/${primarySite.key}/content/article/${createdEntry.body.id as string}?locale=pt-BR`,
+        )
+        .set("If-None-Match", publicDetail.headers.etag as string)
+        .expect(304);
+      const publicCollection = await request(app.getHttpServer())
+        .get(`/public/sites/${primarySite.key}/content/article?locale=pt-BR&limit=1`)
+        .expect(200);
+      expect(publicCollection.body).toEqual({ items: [publicDetail.body], nextCursor: null });
+      await request(app.getHttpServer())
+        .get(
+          `/public/sites/${secondarySite.key}/content/article/${createdEntry.body.id as string}?locale=en-US`,
+        )
+        .expect(404);
+      await request(app.getHttpServer())
+        .get(`/public/sites/${primarySite.key}/content/article`)
+        .expect(400);
+
       const repeatedPublish = await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
@@ -967,6 +1045,16 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 4,
         status: "DRAFT",
       });
+
+      await request(app.getHttpServer())
+        .get(
+          `/public/sites/${primarySite.key}/content/article/${createdEntry.body.id as string}?locale=pt-BR`,
+        )
+        .expect(404);
+      const unpublishedCollection = await request(app.getHttpServer())
+        .get(`/public/sites/${primarySite.key}/content/article?locale=pt-BR`)
+        .expect(200);
+      expect(unpublishedCollection.body).toEqual({ items: [], nextCursor: null });
 
       await request(app.getHttpServer())
         .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
