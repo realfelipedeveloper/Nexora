@@ -1,16 +1,24 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   NotFoundException,
   PayloadTooLargeException,
+  PreconditionFailedException,
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthenticatedRequest } from "../identity/session-authentication.guard.js";
-import { ContentEntriesController, ContentTypesController } from "./content-admin.controller.js";
+import {
+  ContentEntriesController,
+  ContentTypesController,
+  parseContentPrecondition,
+} from "./content-admin.controller.js";
 import {
   type ContentAdminService,
   ContentEntryNotFoundError,
+  ContentEntryStateConflictError,
+  ContentPreconditionFailedError,
   ContentTypeConflictError,
   ContentTypeInUseError,
   ContentTypeNotFoundError,
@@ -34,6 +42,10 @@ const request = {
   },
 } satisfies AuthenticatedRequest;
 
+function headerResponse() {
+  return { setHeader: vi.fn() };
+}
+
 function fixture() {
   const service = {
     createContentEntry: vi.fn(),
@@ -45,6 +57,7 @@ function fixture() {
     listContentEntries: vi.fn(),
     listContentTypes: vi.fn(),
     updateContentEntry: vi.fn(),
+    updateContentEntryStatus: vi.fn(),
     updateContentType: vi.fn(),
   };
   return {
@@ -55,6 +68,19 @@ function fixture() {
 }
 
 describe("content administration controllers", () => {
+  it("requires a strong positive integer content precondition", () => {
+    expect(parseContentPrecondition('"42"')).toBe(42);
+    expect(() => parseContentPrecondition("42")).toThrow(BadRequestException);
+    expect(() => parseContentPrecondition('W/"42"')).toThrow(BadRequestException);
+    expect(() => parseContentPrecondition('"2147483648"')).toThrow(BadRequestException);
+    expect(() => parseContentPrecondition(undefined)).toThrow(HttpException);
+    try {
+      parseContentPrecondition(undefined);
+    } catch (error) {
+      expect((error as HttpException).getStatus()).toBe(428);
+    }
+  });
+
   it("keeps site scope and bounded pagination in list calls", async () => {
     const { entries, service, types } = fixture();
     service.listContentTypes.mockResolvedValue({ items: [] });
@@ -75,24 +101,36 @@ describe("content administration controllers", () => {
 
   it("passes only the authenticated actor and site into mutations", async () => {
     const { entries, service, types } = fixture();
-    service.createContentType.mockResolvedValue({ id: "type-1" });
-    service.createContentEntry.mockResolvedValue({ id: "entry-1" });
+    service.createContentType.mockResolvedValue({ id: "type-1", schemaVersion: 1 });
+    service.createContentEntry.mockResolvedValue({ id: "entry-1", revision: 1 });
 
-    await types.create(request, "site-1", "application/json; charset=utf-8", {
-      displayName: "Article",
-      fields: [],
-      key: "article",
-    });
+    await types.create(
+      request,
+      "site-1",
+      "application/json; charset=utf-8",
+      {
+        displayName: "Article",
+        fields: [],
+        key: "article",
+      },
+      headerResponse(),
+    );
     expect(service.createContentType).toHaveBeenCalledWith("admin-1", "site-1", {
       displayName: "Article",
       fields: [],
       key: "article",
     });
 
-    await entries.create(request, "site-1", "application/json", {
-      contentTypeId: "type-1",
-      locales: [],
-    });
+    await entries.create(
+      request,
+      "site-1",
+      "application/json",
+      {
+        contentTypeId: "type-1",
+        locales: [],
+      },
+      headerResponse(),
+    );
     expect(service.createContentEntry).toHaveBeenCalledWith("admin-1", "site-1", {
       contentTypeId: "type-1",
       locales: [],
@@ -101,9 +139,9 @@ describe("content administration controllers", () => {
 
   it("rejects non-JSON writes before calling the service", async () => {
     const { service, types } = fixture();
-    await expect(types.create(request, "site-1", "text/plain", {})).rejects.toBeInstanceOf(
-      UnsupportedMediaTypeException,
-    );
+    await expect(
+      types.create(request, "site-1", "text/plain", {}, headerResponse()),
+    ).rejects.toBeInstanceOf(UnsupportedMediaTypeException);
     expect(service.createContentType).not.toHaveBeenCalled();
   });
 
@@ -116,25 +154,79 @@ describe("content administration controllers", () => {
     [new ContentEntryNotFoundError(), NotFoundException],
     [new ContentTypeConflictError(), ConflictException],
     [new ContentTypeInUseError(), ConflictException],
+    [new ContentEntryStateConflictError(), ConflictException],
+    [new ContentPreconditionFailedError(), PreconditionFailedException],
   ])("maps domain errors to bounded HTTP responses", async (failure, expected) => {
     const { service, types } = fixture();
     service.getContentType.mockRejectedValue(failure);
-    await expect(types.get("site-1", "type-1")).rejects.toBeInstanceOf(expected);
+    await expect(types.get("site-1", "type-1", headerResponse())).rejects.toBeInstanceOf(expected);
   });
 
-  it("delegates updates and deletes without returning deleted content", async () => {
+  it("delegates conditional updates, state changes and deletes", async () => {
     const { entries, service, types } = fixture();
     service.updateContentType.mockResolvedValue({ id: "type-1", schemaVersion: 2 });
     service.updateContentEntry.mockResolvedValue({ id: "entry-1", revision: 2 });
+    service.updateContentEntryStatus.mockResolvedValue({
+      id: "entry-1",
+      revision: 3,
+      status: "PUBLISHED",
+    });
     service.deleteContentType.mockResolvedValue(undefined);
     service.deleteContentEntry.mockResolvedValue(undefined);
 
-    await types.update(request, "site-1", "type-1", "application/json", {
+    await types.update(
+      request,
+      "site-1",
+      "type-1",
+      "application/json",
+      '"1"',
+      { displayName: "Article", fields: [] },
+      headerResponse(),
+    );
+    expect(service.updateContentType).toHaveBeenCalledWith("admin-1", "site-1", "type-1", 1, {
       displayName: "Article",
       fields: [],
     });
-    await entries.update(request, "site-1", "entry-1", "application/json", { locales: [] });
-    await expect(types.delete(request, "site-1", "type-1")).resolves.toBeUndefined();
-    await expect(entries.delete(request, "site-1", "entry-1")).resolves.toBeUndefined();
+    await entries.update(
+      request,
+      "site-1",
+      "entry-1",
+      "application/json",
+      '"1"',
+      { locales: [] },
+      headerResponse(),
+    );
+    await entries.updateStatus(
+      request,
+      "site-1",
+      "entry-1",
+      "application/json",
+      '"2"',
+      { status: "PUBLISHED" },
+      headerResponse(),
+    );
+    expect(service.updateContentEntryStatus).toHaveBeenCalledWith(
+      "admin-1",
+      "site-1",
+      "entry-1",
+      2,
+      { status: "PUBLISHED" },
+    );
+    await expect(types.delete(request, "site-1", "type-1", '"2"')).resolves.toBeUndefined();
+    await expect(entries.delete(request, "site-1", "entry-1", '"3"')).resolves.toBeUndefined();
+  });
+
+  it("returns ETags for mutable content resources", async () => {
+    const { entries, service, types } = fixture();
+    const typeResponse = headerResponse();
+    const entryResponse = headerResponse();
+    service.getContentType.mockResolvedValue({ id: "type-1", schemaVersion: 7 });
+    service.getContentEntry.mockResolvedValue({ id: "entry-1", revision: 12 });
+
+    await types.get("site-1", "type-1", typeResponse);
+    await entries.get("site-1", "entry-1", entryResponse);
+
+    expect(typeResponse.setHeader).toHaveBeenCalledWith("ETag", '"7"');
+    expect(entryResponse.setHeader).toHaveBeenCalledWith("ETag", '"12"');
   });
 });

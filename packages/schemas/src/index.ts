@@ -84,6 +84,8 @@ export const fieldDefinitionKeySchema = contentTypeKeySchema;
 
 export const contentSchemaVersionSchema = z.number().int().positive();
 
+export const contentEntryStatusSchema = z.enum(["DRAFT", "PUBLISHED"]);
+
 export const contentLocaleDataSchema = z.record(z.string(), z.unknown());
 
 function boundedLengthConfiguration(maximum: number) {
@@ -255,8 +257,13 @@ export const contentEntryUpdateSchema = z.strictObject({
   locales: contentLocaleWritesSchema,
 });
 
+export const contentEntryStatusUpdateSchema = z.strictObject({
+  status: contentEntryStatusSchema,
+});
+
 export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>;
 export type ContentTypeCreateInput = z.infer<typeof contentTypeCreateSchema>;
 export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
 export type ContentEntryCreateInput = z.infer<typeof contentEntryCreateSchema>;
 export type ContentEntryUpdateInput = z.infer<typeof contentEntryUpdateSchema>;
+export type ContentEntryStatusUpdateInput = z.infer<typeof contentEntryStatusUpdateSchema>;

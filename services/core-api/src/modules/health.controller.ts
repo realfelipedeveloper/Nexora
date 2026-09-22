@@ -1,8 +1,11 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Inject } from "@nestjs/common";
 import { runtimeConfig } from "@nexora/config";
+import { ContentMetrics } from "./content/content-metrics.js";
 
 @Controller()
 export class HealthController {
+  constructor(@Inject(ContentMetrics) private readonly contentMetrics: ContentMetrics) {}
+
   @Get("health")
   health() {
     return {
@@ -30,6 +33,6 @@ export class HealthController {
 
   @Get("metrics")
   metrics() {
-    return "# Nexora metrics baseline\nnexora_core_api_up 1\n";
+    return this.contentMetrics.render();
   }
 }

@@ -16,6 +16,11 @@ enum SiteStatus {
   ARCHIVED
 }
 
+enum ContentEntryStatus {
+  DRAFT
+  PUBLISHED
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -199,13 +204,15 @@ model ContentTypeSchemaVersion {
 }
 
 model ContentEntry {
-  id            String   @id @default(uuid())
+  id            String             @id @default(uuid())
   siteId        String
   contentTypeId String
-  schemaVersion Int      @default(1)
-  revision      Int      @default(1)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  schemaVersion Int                @default(1)
+  revision      Int                @default(1)
+  status        ContentEntryStatus @default(DRAFT)
+  publishedAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
   site                     Site                     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   contentType              ContentType              @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Restrict)
@@ -214,6 +221,7 @@ model ContentEntry {
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
+  @@index([siteId, status, updatedAt])
 }
 
 model ContentLocale {
