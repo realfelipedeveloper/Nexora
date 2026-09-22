@@ -1109,31 +1109,38 @@ describe("PostgreSQL migrations and integration", () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
 
     try {
-      const attempts = await Promise.allSettled([
-        provisionInitialAdmin(prisma, {
-          displayName: "First Admin",
-          email: "first@example.com",
-          password: "first secure administrator password",
-        }),
-        provisionInitialAdmin(prisma, {
-          displayName: "Second Admin",
-          email: "second@example.com",
-          password: "second secure administrator password",
-        }),
-      ]);
-
-      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
-      const rejection = attempts.find((attempt) => attempt.status === "rejected");
-      expect(rejection).toBeDefined();
-      expect((rejection as PromiseRejectedResult).reason).toBeInstanceOf(
-        AdminAlreadyProvisionedError,
-      );
-      await expect(prisma.user.count({ where: { isSystemAdmin: true } })).resolves.toBe(1);
-      await expect(
-        prisma.auditEvent.count({
+      for (let round = 0; round < 5; round += 1) {
+        await prisma.auditEvent.deleteMany({
           where: { action: "identity.system_admin.provisioned" },
-        }),
-      ).resolves.toBe(1);
+        });
+        await prisma.user.deleteMany({ where: { isSystemAdmin: true } });
+
+        const attempts = await Promise.allSettled([
+          provisionInitialAdmin(prisma, {
+            displayName: "First Admin",
+            email: `first-${round}@example.com`,
+            password: "first secure administrator password",
+          }),
+          provisionInitialAdmin(prisma, {
+            displayName: "Second Admin",
+            email: `second-${round}@example.com`,
+            password: "second secure administrator password",
+          }),
+        ]);
+
+        expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+        const rejection = attempts.find((attempt) => attempt.status === "rejected");
+        expect(rejection).toBeDefined();
+        expect((rejection as PromiseRejectedResult).reason).toBeInstanceOf(
+          AdminAlreadyProvisionedError,
+        );
+        await expect(prisma.user.count({ where: { isSystemAdmin: true } })).resolves.toBe(1);
+        await expect(
+          prisma.auditEvent.count({
+            where: { action: "identity.system_admin.provisioned" },
+          }),
+        ).resolves.toBe(1);
+      }
     } finally {
       await prisma.$disconnect();
     }
