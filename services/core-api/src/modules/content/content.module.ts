@@ -5,11 +5,13 @@ import { ContentEntriesController, ContentTypesController } from "./content-admi
 import { ContentAdminService } from "./content-admin.service.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentMetrics } from "./content-metrics.js";
+import { PublicContentController } from "./content-public.controller.js";
+import { PublicContentService } from "./content-public.service.js";
 
 @Module({
-  controllers: [ContentEntriesController, ContentTypesController],
-  exports: [ContentAdminService, ContentFieldValidator, ContentMetrics],
+  controllers: [ContentEntriesController, ContentTypesController, PublicContentController],
+  exports: [ContentAdminService, ContentFieldValidator, ContentMetrics, PublicContentService],
   imports: [DatabaseModule, IdentityModule],
-  providers: [ContentAdminService, ContentFieldValidator, ContentMetrics],
+  providers: [ContentAdminService, ContentFieldValidator, ContentMetrics, PublicContentService],
 })
 export class ContentModule {}

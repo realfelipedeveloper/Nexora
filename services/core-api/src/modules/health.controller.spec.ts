@@ -15,12 +15,16 @@ describe("HealthController", () => {
   it("exposes bounded editorial counters", () => {
     const metrics = new ContentMetrics();
     metrics.recordPreconditionFailure();
+    metrics.recordPublicRead("detail", "hit");
     metrics.recordStateTransition("DRAFT", "PUBLISHED");
     const output = new HealthController(metrics).metrics();
 
     expect(output).toContain("nexora_content_precondition_failures_total 1");
     expect(output).toContain(
       'nexora_content_state_transitions_total{from="DRAFT",to="PUBLISHED"} 1',
+    );
+    expect(output).toContain(
+      'nexora_public_content_reads_total{operation="detail",outcome="hit"} 1',
     );
   });
 });

@@ -221,6 +221,7 @@ model ContentEntry {
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
+  @@index([siteId, contentTypeId, status, publishedAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, status, updatedAt])
 }
 
