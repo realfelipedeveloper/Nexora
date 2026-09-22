@@ -654,7 +654,15 @@ describe("PostgreSQL migrations and integration", () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
     const password = "content administration integration password";
     const passwordHash = await hashPassword(password);
-    const [editor, publisher] = await Promise.all([
+    const [viewer, editor, publisher] = await Promise.all([
+      prisma.user.create({
+        data: {
+          displayName: "Content Viewer",
+          email: "content.viewer@example.com",
+          normalizedEmail: "content.viewer@example.com",
+          passwordHash,
+        },
+      }),
       prisma.user.create({
         data: {
           displayName: "Content Editor",
@@ -687,6 +695,9 @@ describe("PostgreSQL migrations and integration", () => {
       }),
     ]);
     await Promise.all([
+      prisma.siteRoleAssignment.create({
+        data: { roleKey: "viewer", siteId: primarySite.id, userId: viewer.id },
+      }),
       prisma.siteRoleAssignment.create({
         data: { roleKey: "editor", siteId: primarySite.id, userId: editor.id },
       }),
@@ -743,8 +754,23 @@ describe("PostgreSQL migrations and integration", () => {
           csrfToken: login.body.csrfToken as string,
         };
       };
+      const viewerSession = await loginAs(viewer.email);
       const { cookie, csrfToken } = await loginAs(editor.email);
       const publisherSession = await loginAs(publisher.email);
+
+      await request(app.getHttpServer()).get(`/sites/${primarySite.id}/content-types`).expect(401);
+      const auditCountBeforeViewerWrite = await prisma.auditEvent.count({
+        where: { action: { startsWith: "content." } },
+      });
+      await request(app.getHttpServer())
+        .post(`/sites/${primarySite.id}/content-types`)
+        .set("Cookie", viewerSession.cookie)
+        .set("x-csrf-token", viewerSession.csrfToken)
+        .send({ displayName: "Viewer type", fields: [], key: "viewer-type" })
+        .expect(403);
+      await expect(
+        prisma.auditEvent.count({ where: { action: { startsWith: "content." } } }),
+      ).resolves.toBe(auditCountBeforeViewerWrite);
 
       await request(app.getHttpServer())
         .post(`/sites/${primarySite.id}/content-types`)
@@ -773,6 +799,15 @@ describe("PostgreSQL migrations and integration", () => {
       expect(createdType.headers["cache-control"]).toBe("no-store");
       expect(createdType.headers.etag).toBe('"1"');
       expect(createdType.body).toMatchObject({ key: "article", schemaVersion: 1 });
+
+      await request(app.getHttpServer())
+        .get(`/sites/${primarySite.id}/content-types`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
+      await request(app.getHttpServer())
+        .get(`/sites/${secondarySite.id}/content-types`)
+        .set("Cookie", publisherSession.cookie)
+        .expect(403);
 
       await request(app.getHttpServer())
         .post(`/sites/${secondarySite.id}/content-types`)
@@ -875,6 +910,10 @@ describe("PostgreSQL migrations and integration", () => {
         schemaVersion: 2,
         status: "DRAFT",
       });
+      await request(app.getHttpServer())
+        .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
 
       await request(app.getHttpServer())
         .get(
@@ -925,6 +964,24 @@ describe("PostgreSQL migrations and integration", () => {
       expect(updatedEntry?.headers.etag).toBe('"2"');
       expect(updatedEntry?.body).toMatchObject({ revision: 2, schemaVersion: 2 });
 
+      const auditCountBeforeDeniedMutations = await prisma.auditEvent.count({
+        where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+      });
+      await request(app.getHttpServer())
+        .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
+        .set("Cookie", viewerSession.cookie)
+        .set("x-csrf-token", viewerSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send(entryCommand)
+        .expect(403);
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", viewerSession.cookie)
+        .set("x-csrf-token", viewerSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "PUBLISHED" })
+        .expect(403);
+
       await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", cookie)
@@ -932,6 +989,11 @@ describe("PostgreSQL migrations and integration", () => {
         .set("If-Match", '"2"')
         .send({ status: "PUBLISHED" })
         .expect(403);
+      await expect(
+        prisma.auditEvent.count({
+          where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+        }),
+      ).resolves.toBe(auditCountBeforeDeniedMutations);
 
       await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
@@ -1137,6 +1199,48 @@ describe("PostgreSQL migrations and integration", () => {
       await expect(prisma.permission.count()).resolves.toBe(10);
       await expect(prisma.role.count()).resolves.toBe(4);
       await expect(prisma.rolePermission.count()).resolves.toBe(24);
+
+      const roleMatrix = await prisma.role.findMany({
+        orderBy: { key: "asc" },
+        select: {
+          key: true,
+          permissions: {
+            orderBy: { permissionKey: "asc" },
+            select: { permissionKey: true },
+          },
+        },
+      });
+      expect(
+        Object.fromEntries(
+          roleMatrix.map((role) => [
+            role.key,
+            role.permissions.map(({ permissionKey }) => permissionKey),
+          ]),
+        ),
+      ).toEqual({
+        editor: ["content.read", "content.write", "media.read", "media.write", "site.read"],
+        publisher: [
+          "content.publish",
+          "content.read",
+          "content.write",
+          "media.read",
+          "media.write",
+          "site.read",
+        ],
+        "site-admin": [
+          "content.publish",
+          "content.read",
+          "content.write",
+          "media.read",
+          "media.write",
+          "members.manage",
+          "members.read",
+          "settings.read",
+          "settings.write",
+          "site.read",
+        ],
+        viewer: ["content.read", "media.read", "site.read"],
+      });
 
       const user = await prisma.user.create({
         data: {

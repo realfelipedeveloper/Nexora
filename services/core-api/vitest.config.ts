@@ -33,6 +33,12 @@ export default defineConfig({
           lines: 95,
           statements: 95,
         },
+        "src/modules/content/**/*.ts": {
+          branches: 80,
+          functions: 95,
+          lines: 85,
+          statements: 85,
+        },
       },
     },
   },

@@ -150,6 +150,34 @@ test.describe("frontend foundation", () => {
     expect(logoutHeader).toBe(csrfToken);
   });
 
+  test("editorial foundation remains keyboard accessible on a narrow viewport", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ height: 844, width: 390 });
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await routeEmptyWorkspace(page);
+
+    await page.goto(cmsUrl);
+
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Initial field types" })).toBeVisible();
+    await expect(page.locator(".field-tile")).toHaveCount(18);
+    const overview = page.getByRole("button", { name: "Overview" });
+    const settings = page.getByRole("button", { name: "Settings" });
+    await overview.focus();
+    await page.keyboard.press("Tab");
+    await expect(settings).toBeFocused();
+
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
   test("cms saves scoped settings with the selected site's version", async ({ page }) => {
     let brandingHeaders: Record<string, string> | undefined;
     let identityHeaders: Record<string, string> | undefined;
