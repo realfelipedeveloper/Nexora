@@ -84,7 +84,35 @@ export const fieldDefinitionKeySchema = contentTypeKeySchema;
 
 export const contentSchemaVersionSchema = z.number().int().positive();
 
-export const contentEntryStatusSchema = z.enum(["DRAFT", "PUBLISHED"]);
+export const contentEntryStatuses = ["DRAFT", "IN_REVIEW", "PUBLISHED", "ARCHIVED"] as const;
+
+export const contentEntryStatusSchema = z.enum(contentEntryStatuses);
+
+export type ContentEntryStatus = z.infer<typeof contentEntryStatusSchema>;
+
+export const contentEntryWorkflowTransitions = Object.freeze([
+  { action: "SUBMIT_FOR_REVIEW", from: "DRAFT", to: "IN_REVIEW" },
+  { action: "RETURN_TO_DRAFT", from: "IN_REVIEW", to: "DRAFT" },
+  { action: "PUBLISH", from: "IN_REVIEW", to: "PUBLISHED" },
+  { action: "UNPUBLISH", from: "PUBLISHED", to: "DRAFT" },
+  { action: "ARCHIVE", from: "PUBLISHED", to: "ARCHIVED" },
+  { action: "RESTORE", from: "ARCHIVED", to: "DRAFT" },
+] as const satisfies readonly {
+  action: string;
+  from: ContentEntryStatus;
+  to: ContentEntryStatus;
+}[]);
+
+export type ContentEntryWorkflowTransition = (typeof contentEntryWorkflowTransitions)[number];
+
+export function findContentEntryWorkflowTransition(
+  from: ContentEntryStatus,
+  to: ContentEntryStatus,
+): ContentEntryWorkflowTransition | undefined {
+  return contentEntryWorkflowTransitions.find(
+    (transition) => transition.from === from && transition.to === to,
+  );
+}
 
 export const contentLocaleDataSchema = z.record(z.string(), z.unknown());
 
