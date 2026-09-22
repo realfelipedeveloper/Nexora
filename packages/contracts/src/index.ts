@@ -21,3 +21,20 @@ export type PublicSiteConfiguration = {
     key: string;
   };
 };
+
+export type PublicContentEntry = {
+  contentType: {
+    key: string;
+  };
+  data: Record<string, unknown>;
+  id: string;
+  locale: string;
+  publishedAt: string;
+  schemaVersion: number;
+  updatedAt: string;
+};
+
+export type PublicContentPage = {
+  items: PublicContentEntry[];
+  nextCursor: string | null;
+};
