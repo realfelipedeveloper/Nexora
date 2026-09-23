@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   contentLocaleDataSchema,
   contentEntryCreateSchema,
+  contentEntryStatusSchema,
   contentEntryStatusUpdateSchema,
+  contentEntryWorkflowTransitions,
   contentSchemaVersionSchema,
   contentTypeCreateSchema,
   contentTypeKeySchema,
   contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
+  findContentEntryWorkflowTransition,
 } from "./index.js";
 
 describe("content modeling contracts", () => {
@@ -128,17 +131,36 @@ describe("content modeling contracts", () => {
     ).toBe(false);
   });
 
-  it("accepts only the minimal editorial states", () => {
-    expect(contentEntryStatusUpdateSchema.parse({ status: "DRAFT" })).toEqual({
-      status: "DRAFT",
-    });
-    expect(contentEntryStatusUpdateSchema.parse({ status: "PUBLISHED" })).toEqual({
-      status: "PUBLISHED",
-    });
+  it("models the bounded editorial workflow states", () => {
+    expect(contentEntryStatusSchema.options).toEqual([
+      "DRAFT",
+      "IN_REVIEW",
+      "PUBLISHED",
+      "ARCHIVED",
+    ]);
+    for (const status of contentEntryStatusSchema.options) {
+      expect(contentEntryStatusUpdateSchema.parse({ status })).toEqual({ status });
+    }
     expect(contentEntryStatusUpdateSchema.safeParse({ status: "SCHEDULED" }).success).toBe(false);
     expect(
       contentEntryStatusUpdateSchema.safeParse({ reason: "not persisted", status: "DRAFT" })
         .success,
     ).toBe(false);
+  });
+
+  it("defines every allowed workflow edge explicitly", () => {
+    expect(contentEntryWorkflowTransitions).toEqual([
+      { action: "SUBMIT_FOR_REVIEW", from: "DRAFT", to: "IN_REVIEW" },
+      { action: "RETURN_TO_DRAFT", from: "IN_REVIEW", to: "DRAFT" },
+      { action: "PUBLISH", from: "IN_REVIEW", to: "PUBLISHED" },
+      { action: "UNPUBLISH", from: "PUBLISHED", to: "DRAFT" },
+      { action: "ARCHIVE", from: "PUBLISHED", to: "ARCHIVED" },
+      { action: "RESTORE", from: "ARCHIVED", to: "DRAFT" },
+    ]);
+    expect(findContentEntryWorkflowTransition("DRAFT", "IN_REVIEW")).toMatchObject({
+      action: "SUBMIT_FOR_REVIEW",
+    });
+    expect(findContentEntryWorkflowTransition("DRAFT", "PUBLISHED")).toBeUndefined();
+    expect(findContentEntryWorkflowTransition("ARCHIVED", "PUBLISHED")).toBeUndefined();
   });
 });

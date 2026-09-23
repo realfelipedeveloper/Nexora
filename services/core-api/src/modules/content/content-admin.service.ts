@@ -6,7 +6,9 @@ import {
   contentEntryUpdateSchema,
   contentTypeCreateSchema,
   contentTypeUpdateSchema,
+  findContentEntryWorkflowTransition,
   type ContentEntryCreateInput,
+  type ContentEntryWorkflowTransition,
   type ContentEntryStatusUpdateInput,
   type ContentEntryUpdateInput,
   type ContentTypeCreateInput,
@@ -158,7 +160,7 @@ export class ContentEntryStateConflictError extends Error {
   override readonly name = "ContentEntryStateConflictError";
 
   constructor() {
-    super("Published content must be returned to draft before it can be changed.");
+    super("The requested content workflow transition is not allowed.");
   }
 }
 
@@ -636,7 +638,7 @@ export class ContentAdminService {
     input: unknown,
   ) {
     const command = parseContentEntryStatusUpdate(input);
-    let transition: { from: "DRAFT" | "PUBLISHED"; to: "DRAFT" | "PUBLISHED" } | undefined;
+    let transition: ContentEntryWorkflowTransition | undefined;
 
     const result = await this.prisma.$transaction(async (transaction) => {
       const current = await transaction.contentEntry.findUnique({
@@ -654,6 +656,10 @@ export class ContentAdminService {
           select: contentEntryDetailSelection,
           where: { id_siteId: { id: contentEntryId, siteId } },
         });
+      }
+      const workflowTransition = findContentEntryWorkflowTransition(current.status, command.status);
+      if (!workflowTransition) {
+        throw new ContentEntryStateConflictError();
       }
 
       const revision = expectedRevision + 1;
@@ -683,11 +689,12 @@ export class ContentAdminService {
             previousRevision: expectedRevision,
             revision,
             siteId,
+            transition: workflowTransition.action,
             to: entry.status,
           },
         },
       });
-      transition = { from: current.status, to: entry.status };
+      transition = workflowTransition;
       return entry;
     });
     if (transition) {
