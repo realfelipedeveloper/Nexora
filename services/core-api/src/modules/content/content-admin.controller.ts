@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Header,
   Headers,
@@ -30,11 +31,13 @@ import { SessionAuthenticationGuard } from "../identity/session-authentication.g
 import {
   RequireSitePermissions,
   SiteAuthorizationGuard,
+  type SiteScopedRequest,
 } from "../identity/site-authorization.guard.js";
 import {
   ContentAdminService,
   ContentEntryNotFoundError,
   ContentEntryStateConflictError,
+  ContentEntryTransitionForbiddenError,
   ContentPreconditionFailedError,
   ContentTypeConflictError,
   ContentTypeInUseError,
@@ -58,6 +61,13 @@ function actorId(request: AuthenticatedRequest) {
     throw new HttpException("Authentication required.", 401);
   }
   return request.identity.user.id;
+}
+
+function siteAccess(request: SiteScopedRequest) {
+  if (!request.siteAccess) {
+    throw new ForbiddenException("Site access denied.");
+  }
+  return request.siteAccess;
 }
 
 export function parseContentPrecondition(ifMatch: string | undefined) {
@@ -97,6 +107,9 @@ function mapContentError(error: unknown): never {
   }
   if (error instanceof ContentEntryStateConflictError) {
     throw new ConflictException(error.message);
+  }
+  if (error instanceof ContentEntryTransitionForbiddenError) {
+    throw new ForbiddenException(error.message);
   }
   if (error instanceof ContentPreconditionFailedError) {
     throw new PreconditionFailedException(error.message);
@@ -308,10 +321,10 @@ export class ContentEntriesController {
 
   @Patch(":contentEntryId/status")
   @Header("Cache-Control", "no-store")
-  @RequireSitePermissions("content.publish")
+  @RequireSitePermissions("content.read")
   @UseGuards(SessionCsrfGuard)
   async updateStatus(
-    @Req() request: AuthenticatedRequest,
+    @Req() request: SiteScopedRequest,
     @Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string,
     @Param("contentEntryId", new ParseUUIDPipe({ version: "4" })) contentEntryId: string,
     @Headers("content-type") contentType: string | undefined,
@@ -325,6 +338,7 @@ export class ContentEntriesController {
       const updated = await this.content.updateContentEntryStatus(
         actorId(request),
         siteId,
+        siteAccess(request),
         contentEntryId,
         expectedRevision,
         body,

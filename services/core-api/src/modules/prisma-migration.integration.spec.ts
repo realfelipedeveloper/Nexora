@@ -1012,16 +1012,18 @@ describe("PostgreSQL migrations and integration", () => {
         .set("Cookie", viewerSession.cookie)
         .set("x-csrf-token", viewerSession.csrfToken)
         .set("If-Match", '"2"')
-        .send({ status: "PUBLISHED" })
+        .send({ status: "IN_REVIEW" })
         .expect(403);
 
       await request(app.getHttpServer())
-        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .patch(
+          `/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}/status`,
+        )
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
         .set("If-Match", '"2"')
-        .send({ status: "PUBLISHED" })
-        .expect(403);
+        .send({ status: "IN_REVIEW" })
+        .expect(404);
       await expect(
         prisma.auditEvent.count({
           where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
@@ -1054,8 +1056,8 @@ describe("PostgreSQL migrations and integration", () => {
 
       const inReview = await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
-        .set("Cookie", publisherSession.cookie)
-        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
         .set("If-Match", '"2"')
         .send({ status: "IN_REVIEW" })
         .expect(200);
@@ -1065,6 +1067,22 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 3,
         status: "IN_REVIEW",
       });
+
+      const auditCountBeforeEditorPublish = await prisma.auditEvent.count({
+        where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+      });
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "PUBLISHED" })
+        .expect(403);
+      await expect(
+        prisma.auditEvent.count({
+          where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+        }),
+      ).resolves.toBe(auditCountBeforeEditorPublish);
 
       const published = await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
@@ -1239,7 +1257,7 @@ describe("PostgreSQL migrations and integration", () => {
         auditEvents
           .filter(({ action }) => action === "content.entry.status.changed")
           .map(({ actorId }) => actorId),
-      ).toEqual([publisher.id, publisher.id, publisher.id]);
+      ).toEqual([editor.id, publisher.id, publisher.id]);
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
 
       const metrics = moduleRef.get(ContentMetrics).render();

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   NotFoundException,
   PayloadTooLargeException,
@@ -8,7 +9,7 @@ import {
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthenticatedRequest } from "../identity/session-authentication.guard.js";
+import type { SiteScopedRequest } from "../identity/site-authorization.guard.js";
 import {
   ContentEntriesController,
   ContentTypesController,
@@ -18,6 +19,7 @@ import {
   type ContentAdminService,
   ContentEntryNotFoundError,
   ContentEntryStateConflictError,
+  ContentEntryTransitionForbiddenError,
   ContentPreconditionFailedError,
   ContentTypeConflictError,
   ContentTypeInUseError,
@@ -40,7 +42,13 @@ const request = {
       isSystemAdmin: true,
     },
   },
-} satisfies AuthenticatedRequest;
+  siteAccess: {
+    isSystemAdmin: true,
+    permissionKeys: ["content.read", "content.write", "content.publish"],
+    roleKeys: [],
+    siteId: "site-1",
+  },
+} satisfies SiteScopedRequest;
 
 function headerResponse() {
   return { setHeader: vi.fn() };
@@ -155,6 +163,7 @@ describe("content administration controllers", () => {
     [new ContentTypeConflictError(), ConflictException],
     [new ContentTypeInUseError(), ConflictException],
     [new ContentEntryStateConflictError(), ConflictException],
+    [new ContentEntryTransitionForbiddenError(), ForbiddenException],
     [new ContentPreconditionFailedError(), PreconditionFailedException],
   ])("maps domain errors to bounded HTTP responses", async (failure, expected) => {
     const { service, types } = fixture();
@@ -208,6 +217,7 @@ describe("content administration controllers", () => {
     expect(service.updateContentEntryStatus).toHaveBeenCalledWith(
       "admin-1",
       "site-1",
+      request.siteAccess,
       "entry-1",
       2,
       { status: "PUBLISHED" },
