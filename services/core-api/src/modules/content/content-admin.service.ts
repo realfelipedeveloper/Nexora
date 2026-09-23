@@ -15,8 +15,10 @@ import {
   type ContentTypeUpdateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentMetrics } from "./content-metrics.js";
+import { canSetContentWorkflowState } from "./content-workflow-authorization.js";
 
 const defaultPageSize = 25;
 const maximumPageSize = 100;
@@ -161,6 +163,14 @@ export class ContentEntryStateConflictError extends Error {
 
   constructor() {
     super("The requested content workflow transition is not allowed.");
+  }
+}
+
+export class ContentEntryTransitionForbiddenError extends Error {
+  override readonly name = "ContentEntryTransitionForbiddenError";
+
+  constructor() {
+    super("Content workflow transition is not permitted for this site access.");
   }
 }
 
@@ -633,6 +643,7 @@ export class ContentAdminService {
   async updateContentEntryStatus(
     actorId: string,
     siteId: string,
+    access: SiteAccess,
     contentEntryId: string,
     expectedRevision: number,
     input: unknown,
@@ -652,6 +663,9 @@ export class ContentAdminService {
         this.preconditionFailed();
       }
       if (current.status === command.status) {
+        if (!canSetContentWorkflowState(access, siteId, current.status, command.status)) {
+          throw new ContentEntryTransitionForbiddenError();
+        }
         return transaction.contentEntry.findUniqueOrThrow({
           select: contentEntryDetailSelection,
           where: { id_siteId: { id: contentEntryId, siteId } },
@@ -660,6 +674,9 @@ export class ContentAdminService {
       const workflowTransition = findContentEntryWorkflowTransition(current.status, command.status);
       if (!workflowTransition) {
         throw new ContentEntryStateConflictError();
+      }
+      if (!canSetContentWorkflowState(access, siteId, current.status, command.status)) {
+        throw new ContentEntryTransitionForbiddenError();
       }
 
       const revision = expectedRevision + 1;
