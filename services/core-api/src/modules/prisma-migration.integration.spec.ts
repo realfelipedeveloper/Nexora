@@ -54,6 +54,7 @@ const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const migrationsRoot = path.join(workspaceRoot, "services", "core-api", "prisma", "migrations");
 const contentSchemaVersioningMigration = "20260917180000_content_schema_versioning";
 const contentEditorialStateMigration = "20260922143000_content_entry_editorial_state";
+const editorialWorkflowModelMigration = "20260922223000_editorial_workflow_model";
 
 async function applyMigrationsBeforeContentSchemaVersioning(connectionString: string) {
   const client = new Client({ connectionString });
@@ -95,6 +96,21 @@ async function applyContentEditorialStateMigration(connectionString: string) {
   const client = new Client({ connectionString });
   const migration = await readFile(
     path.join(migrationsRoot, contentEditorialStateMigration, "migration.sql"),
+    "utf8",
+  );
+
+  await client.connect();
+  try {
+    await client.query(migration);
+  } finally {
+    await client.end();
+  }
+}
+
+async function applyEditorialWorkflowModelMigration(connectionString: string) {
+  const client = new Client({ connectionString });
+  const migration = await readFile(
+    path.join(migrationsRoot, editorialWorkflowModelMigration, "migration.sql"),
     "utf8",
   );
 
@@ -457,6 +473,22 @@ describe("PostgreSQL migrations and integration", () => {
       });
       await expect(
         prisma.contentEntry.update({
+          data: { status: "IN_REVIEW" },
+          where: { id: entry.id },
+        }),
+      ).resolves.toMatchObject({ publishedAt: null, status: "IN_REVIEW" });
+      await expect(
+        prisma.contentEntry.update({
+          data: { status: "ARCHIVED" },
+          where: { id: entry.id },
+        }),
+      ).resolves.toMatchObject({ publishedAt: null, status: "ARCHIVED" });
+      await prisma.contentEntry.update({
+        data: { status: "DRAFT" },
+        where: { id: entry.id },
+      });
+      await expect(
+        prisma.contentEntry.update({
           data: { status: "PUBLISHED" },
           where: { id: entry.id },
         }),
@@ -624,6 +656,7 @@ describe("PostgreSQL migrations and integration", () => {
 
       await applyContentSchemaVersioningMigration(connectionString);
       await applyContentEditorialStateMigration(connectionString);
+      await applyEditorialWorkflowModelMigration(connectionString);
 
       await expect(
         prisma.contentEntry.findUniqueOrThrow({
@@ -1003,15 +1036,45 @@ describe("PostgreSQL migrations and integration", () => {
         .send({ status: "SCHEDULED" })
         .expect(400);
 
-      const published = await request(app.getHttpServer())
+      const auditCountBeforeInvalidTransition = await prisma.auditEvent.count({
+        where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+      });
+      await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
         .set("If-Match", '"2"')
         .send({ status: "PUBLISHED" })
+        .expect(409);
+      await expect(
+        prisma.auditEvent.count({
+          where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
+        }),
+      ).resolves.toBe(auditCountBeforeInvalidTransition);
+
+      const inReview = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "IN_REVIEW" })
         .expect(200);
-      expect(published.headers.etag).toBe('"3"');
-      expect(published.body).toMatchObject({ revision: 3, status: "PUBLISHED" });
+      expect(inReview.headers.etag).toBe('"3"');
+      expect(inReview.body).toMatchObject({
+        publishedAt: null,
+        revision: 3,
+        status: "IN_REVIEW",
+      });
+
+      const published = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "PUBLISHED" })
+        .expect(200);
+      expect(published.headers.etag).toBe('"4"');
+      expect(published.body).toMatchObject({ revision: 4, status: "PUBLISHED" });
       expect(published.body.publishedAt).toEqual(expect.any(String));
 
       const publicDetail = await request(app.getHttpServer())
@@ -1061,13 +1124,13 @@ describe("PostgreSQL migrations and integration", () => {
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
-        .set("If-Match", '"3"')
+        .set("If-Match", '"4"')
         .send({ status: "PUBLISHED" })
         .expect(200);
-      expect(repeatedPublish.headers.etag).toBe('"3"');
+      expect(repeatedPublish.headers.etag).toBe('"4"');
       expect(repeatedPublish.body).toMatchObject({
         publishedAt: published.body.publishedAt,
-        revision: 3,
+        revision: 4,
         status: "PUBLISHED",
       });
 
@@ -1075,7 +1138,7 @@ describe("PostgreSQL migrations and integration", () => {
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
-        .set("If-Match", '"2"')
+        .set("If-Match", '"3"')
         .send({ status: "DRAFT" })
         .expect(412);
 
@@ -1083,7 +1146,7 @@ describe("PostgreSQL migrations and integration", () => {
         .put(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"3"')
+        .set("If-Match", '"4"')
         .send(entryCommand)
         .expect(409);
 
@@ -1091,20 +1154,20 @@ describe("PostgreSQL migrations and integration", () => {
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"3"')
+        .set("If-Match", '"4"')
         .expect(409);
 
       const unpublished = await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
-        .set("If-Match", '"3"')
+        .set("If-Match", '"4"')
         .send({ status: "DRAFT" })
         .expect(200);
-      expect(unpublished.headers.etag).toBe('"4"');
+      expect(unpublished.headers.etag).toBe('"5"');
       expect(unpublished.body).toMatchObject({
         publishedAt: null,
-        revision: 4,
+        revision: 5,
         status: "DRAFT",
       });
 
@@ -1122,7 +1185,7 @@ describe("PostgreSQL migrations and integration", () => {
         .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .expect(200)
-        .expect("ETag", '"4"');
+        .expect("ETag", '"5"');
 
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
@@ -1134,7 +1197,7 @@ describe("PostgreSQL migrations and integration", () => {
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"4"')
+        .set("If-Match", '"5"')
         .expect(204);
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
@@ -1168,6 +1231,7 @@ describe("PostgreSQL migrations and integration", () => {
         "content.entry.updated",
         "content.entry.status.changed",
         "content.entry.status.changed",
+        "content.entry.status.changed",
         "content.entry.deleted",
         "content.type.deleted",
       ]);
@@ -1175,13 +1239,16 @@ describe("PostgreSQL migrations and integration", () => {
         auditEvents
           .filter(({ action }) => action === "content.entry.status.changed")
           .map(({ actorId }) => actorId),
-      ).toEqual([publisher.id, publisher.id]);
+      ).toEqual([publisher.id, publisher.id, publisher.id]);
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
 
       const metrics = moduleRef.get(ContentMetrics).render();
       expect(metrics).toContain("nexora_content_precondition_failures_total 4");
       expect(metrics).toContain(
-        'nexora_content_state_transitions_total{from="DRAFT",to="PUBLISHED"} 1',
+        'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="IN_REVIEW",to="PUBLISHED"} 1',
       );
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="PUBLISHED",to="DRAFT"} 1',

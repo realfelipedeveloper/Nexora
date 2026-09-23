@@ -18,7 +18,9 @@ enum SiteStatus {
 
 enum ContentEntryStatus {
   DRAFT
+  IN_REVIEW
   PUBLISHED
+  ARCHIVED
 }
 
 model User {

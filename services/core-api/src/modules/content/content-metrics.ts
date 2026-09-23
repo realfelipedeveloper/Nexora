@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
+import type { ContentEntryStatus } from "@nexora/schemas";
 
-type EditorialStatus = "DRAFT" | "PUBLISHED";
 type PublicContentOperation = "detail" | "list";
 type PublicContentOutcome = "hit" | "miss";
 
@@ -19,7 +19,7 @@ export class ContentMetrics {
     this.publicReads.set(key, (this.publicReads.get(key) ?? 0) + 1);
   }
 
-  recordStateTransition(from: EditorialStatus, to: EditorialStatus) {
+  recordStateTransition(from: ContentEntryStatus, to: ContentEntryStatus) {
     const key = `${from}:${to}`;
     this.stateTransitions.set(key, (this.stateTransitions.get(key) ?? 0) + 1);
   }
