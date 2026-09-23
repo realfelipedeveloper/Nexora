@@ -3,15 +3,24 @@ import type { ContentEntryStatus } from "@nexora/schemas";
 
 type PublicContentOperation = "detail" | "list";
 type PublicContentOutcome = "hit" | "miss";
+type CollaborationMutation = "assignment_created" | "assignment_deleted" | "comment_created";
 
 @Injectable()
 export class ContentMetrics {
   private preconditionFailures = 0;
+  private readonly collaborationMutations = new Map<CollaborationMutation, number>();
   private readonly publicReads = new Map<string, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
     this.preconditionFailures += 1;
+  }
+
+  recordCollaborationMutation(operation: CollaborationMutation) {
+    this.collaborationMutations.set(
+      operation,
+      (this.collaborationMutations.get(operation) ?? 0) + 1,
+    );
   }
 
   recordPublicRead(operation: PublicContentOperation, outcome: PublicContentOutcome) {
@@ -28,10 +37,16 @@ export class ContentMetrics {
     const lines = [
       "# Nexora metrics baseline",
       "nexora_core_api_up 1",
+      "# TYPE nexora_content_collaboration_mutations_total counter",
+    ];
+    for (const [operation, count] of [...this.collaborationMutations.entries()].sort()) {
+      lines.push(`nexora_content_collaboration_mutations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push(
       "# TYPE nexora_content_precondition_failures_total counter",
       `nexora_content_precondition_failures_total ${this.preconditionFailures}`,
       "# TYPE nexora_public_content_reads_total counter",
-    ];
+    );
     for (const [result, count] of [...this.publicReads.entries()].sort()) {
       const [operation, outcome] = result.split(":");
       lines.push(
