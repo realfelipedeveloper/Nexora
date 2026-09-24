@@ -17,7 +17,10 @@ import {
   ContentEntriesController,
   ContentTypesController,
 } from "./content/content-admin.controller.js";
-import { ContentAdminService } from "./content/content-admin.service.js";
+import {
+  ContentAdminService,
+  ContentPreconditionFailedError,
+} from "./content/content-admin.service.js";
 import { ContentCollaborationController } from "./content/content-collaboration.controller.js";
 import { ContentCollaborationService } from "./content/content-collaboration.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
@@ -40,6 +43,7 @@ import { hashSessionToken } from "./identity/session-token.js";
 import { SiteAccessController } from "./identity/site-access.controller.js";
 import { SiteAccessService } from "./identity/site-access.service.js";
 import { SiteAuthorizationGuard } from "./identity/site-authorization.guard.js";
+import type { SiteAccess } from "./identity/site-permissions.js";
 import { ConfigurationRegistry } from "./sites/configuration-registry.js";
 import {
   GlobalSettingsController,
@@ -1177,6 +1181,13 @@ describe("PostgreSQL migrations and integration", () => {
         .set("If-Match", '"2"')
         .send({ status: "PUBLISHED" })
         .expect(409);
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ status: "ARCHIVED" })
+        .expect(409);
       await expect(
         prisma.auditEvent.count({
           where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
@@ -1200,6 +1211,13 @@ describe("PostgreSQL migrations and integration", () => {
       const auditCountBeforeEditorPublish = await prisma.auditEvent.count({
         where: { entity: "ContentEntry", entityId: createdEntry.body.id as string },
       });
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "ARCHIVED" })
+        .expect(409);
       await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", cookie)
@@ -1284,6 +1302,13 @@ describe("PostgreSQL migrations and integration", () => {
       expect(published.headers.etag).toBe('"4"');
       expect(published.body).toMatchObject({ revision: 4, status: "PUBLISHED" });
       expect(published.body.publishedAt).toEqual(expect.any(String));
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"4"')
+        .send({ status: "IN_REVIEW" })
+        .expect(409);
 
       const publicDetail = await request(app.getHttpServer())
         .get(
@@ -1465,6 +1490,17 @@ describe("PostgreSQL migrations and integration", () => {
         .send({ status: "ARCHIVED" })
         .expect(200)
         .expect("ETag", '"10"');
+      for (const status of ["IN_REVIEW", "PUBLISHED"]) {
+        await request(app.getHttpServer())
+          .patch(
+            `/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`,
+          )
+          .set("Cookie", publisherSession.cookie)
+          .set("x-csrf-token", publisherSession.csrfToken)
+          .set("If-Match", '"10"')
+          .send({ status })
+          .expect(409);
+      }
       await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
@@ -1643,6 +1679,136 @@ describe("PostgreSQL migrations and integration", () => {
       await prisma.$disconnect();
     }
   }, 120_000);
+
+  it("allows only one concurrent workflow transition and audit event per revision", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const actor = await prisma.user.create({
+      data: {
+        displayName: "Workflow Concurrency Publisher",
+        email: "workflow.concurrency.publisher@example.com",
+        normalizedEmail: "workflow.concurrency.publisher@example.com",
+        passwordHash: await hashPassword("workflow concurrency password"),
+      },
+    });
+    const site = await prisma.site.create({
+      data: { key: "workflow-concurrency", name: "Workflow Concurrency" },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Concurrent Article",
+        key: "concurrent-article",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Concurrent Article",
+              fields: [],
+              key: "concurrent-article",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: site.id,
+      },
+    });
+    const access = {
+      isSystemAdmin: false,
+      permissionKeys: ["content.read", "content.write", "content.publish"],
+      roleKeys: ["publisher"],
+      siteId: site.id,
+    } satisfies SiteAccess;
+    const metrics = new ContentMetrics();
+    const service = new ContentAdminService(prisma, new ContentFieldValidator(), metrics);
+    const createEntry = () =>
+      prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, schemaVersion: 1, siteId: site.id },
+      });
+
+    try {
+      const identicalEntry = await createEntry();
+      const identicalAttempts = await Promise.allSettled([
+        service.updateContentEntryStatus(actor.id, site.id, access, identicalEntry.id, 1, {
+          status: "IN_REVIEW",
+        }),
+        service.updateContentEntryStatus(actor.id, site.id, access, identicalEntry.id, 1, {
+          status: "IN_REVIEW",
+        }),
+      ]);
+      expect(identicalAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+      expect(identicalAttempts.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      expect(
+        (identicalAttempts.find(({ status }) => status === "rejected") as PromiseRejectedResult)
+          .reason,
+      ).toBeInstanceOf(ContentPreconditionFailedError);
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: identicalEntry.id } }),
+      ).resolves.toMatchObject({ revision: 2, status: "IN_REVIEW" });
+      await expect(
+        prisma.auditEvent.count({
+          where: {
+            action: "content.entry.status.changed",
+            entityId: identicalEntry.id,
+          },
+        }),
+      ).resolves.toBe(1);
+
+      const competingEntry = await createEntry();
+      await service.updateContentEntryStatus(actor.id, site.id, access, competingEntry.id, 1, {
+        status: "IN_REVIEW",
+      });
+      await prisma.contentEntryReview.create({
+        data: {
+          contentEntryId: competingEntry.id,
+          contentRevision: 2,
+          decision: "APPROVED",
+          reviewerId: actor.id,
+          siteId: site.id,
+        },
+      });
+      const competingAttempts = await Promise.allSettled([
+        service.updateContentEntryStatus(actor.id, site.id, access, competingEntry.id, 2, {
+          status: "PUBLISHED",
+        }),
+        service.updateContentEntryStatus(actor.id, site.id, access, competingEntry.id, 2, {
+          status: "DRAFT",
+        }),
+      ]);
+      expect(competingAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+      expect(competingAttempts.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      expect(
+        (competingAttempts.find(({ status }) => status === "rejected") as PromiseRejectedResult)
+          .reason,
+      ).toBeInstanceOf(ContentPreconditionFailedError);
+
+      const finalEntry = await prisma.contentEntry.findUniqueOrThrow({
+        where: { id: competingEntry.id },
+      });
+      expect(finalEntry).toMatchObject({ revision: 3 });
+      expect(["DRAFT", "PUBLISHED"]).toContain(finalEntry.status);
+      const competingAuditEvents = await prisma.auditEvent.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { metadata: true },
+        where: {
+          action: "content.entry.status.changed",
+          entityId: competingEntry.id,
+        },
+      });
+      expect(competingAuditEvents).toHaveLength(2);
+      expect(competingAuditEvents[0]?.metadata).toMatchObject({
+        previousRevision: 1,
+        revision: 2,
+        transition: "SUBMIT_FOR_REVIEW",
+      });
+      expect(competingAuditEvents[1]?.metadata).toMatchObject({
+        previousRevision: 2,
+        revision: 3,
+        transition: finalEntry.status === "PUBLISHED" ? "PUBLISH" : "RETURN_TO_DRAFT",
+      });
+      expect(metrics.render()).toContain("nexora_content_precondition_failures_total 2");
+    } finally {
+      await prisma.$disconnect();
+    }
+  });
 
   it("enforces seeded roles and isolates editorial access by site", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
