@@ -5,6 +5,7 @@ import {
   contentEntryCommentCreateSchema,
   contentEntryCreateSchema,
   contentEntryReviewCreateSchema,
+  contentEntrySnapshotLocalesSchema,
   contentEntryStatusSchema,
   contentEntryStatusUpdateSchema,
   contentEntryTransitionAuditMetadataSchema,
@@ -62,6 +63,20 @@ describe("content modeling contracts", () => {
     expect(contentLocaleDataSchema.safeParse(["Nexora"]).success).toBe(false);
     expect(contentSchemaVersionSchema.safeParse(1).success).toBe(true);
     expect(contentSchemaVersionSchema.safeParse(0).success).toBe(false);
+  });
+
+  it("validates bounded immutable snapshot locale data", () => {
+    const locale = {
+      data: { title: "Original title" },
+      localeCode: "  pt-BR  ",
+      localeId: "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6",
+      schemaVersion: 2,
+    };
+    expect(contentEntrySnapshotLocalesSchema.parse([locale])).toEqual([
+      { ...locale, localeCode: "pt-BR" },
+    ]);
+    expect(contentEntrySnapshotLocalesSchema.safeParse([]).success).toBe(false);
+    expect(contentEntrySnapshotLocalesSchema.safeParse([locale, locale]).success).toBe(false);
   });
 
   it("accepts bounded, typed schema snapshots for a content type version", () => {
