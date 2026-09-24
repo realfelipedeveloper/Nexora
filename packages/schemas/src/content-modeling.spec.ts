@@ -168,6 +168,17 @@ describe("content modeling contracts", () => {
     expect(findContentEntryWorkflowTransition("ARCHIVED", "PUBLISHED")).toBeUndefined();
   });
 
+  it.each([
+    ["DRAFT", "PUBLISHED"],
+    ["DRAFT", "ARCHIVED"],
+    ["IN_REVIEW", "ARCHIVED"],
+    ["PUBLISHED", "IN_REVIEW"],
+    ["ARCHIVED", "IN_REVIEW"],
+    ["ARCHIVED", "PUBLISHED"],
+  ] as const)("rejects the invalid workflow edge %s -> %s", (from, to) => {
+    expect(findContentEntryWorkflowTransition(from, to)).toBeUndefined();
+  });
+
   it("validates the audit contract for every workflow transition", () => {
     for (const [index, transition] of contentEntryWorkflowTransitions.entries()) {
       expect(
