@@ -9,12 +9,15 @@ import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { PublicContentController } from "./content-public.controller.js";
 import { PublicContentService } from "./content-public.service.js";
+import { ContentVersioningController } from "./content-versioning.controller.js";
+import { ContentVersioningService } from "./content-versioning.service.js";
 
 @Module({
   controllers: [
     ContentCollaborationController,
     ContentEntriesController,
     ContentTypesController,
+    ContentVersioningController,
     PublicContentController,
   ],
   exports: [
@@ -22,6 +25,7 @@ import { PublicContentService } from "./content-public.service.js";
     ContentCollaborationService,
     ContentFieldValidator,
     ContentMetrics,
+    ContentVersioningService,
     PublicContentService,
   ],
   imports: [DatabaseModule, IdentityModule],
@@ -30,6 +34,7 @@ import { PublicContentService } from "./content-public.service.js";
     ContentCollaborationService,
     ContentFieldValidator,
     ContentMetrics,
+    ContentVersioningService,
     PublicContentService,
   ],
 })
