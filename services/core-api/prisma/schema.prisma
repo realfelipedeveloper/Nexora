@@ -321,4 +321,6 @@ model AuditEvent {
   entityId  String?
   metadata  Json     @default("{}")
   createdAt DateTime @default(now())
+
+  @@index([action, entity, entityId, createdAt(sort: Desc), id(sort: Desc)])
 }

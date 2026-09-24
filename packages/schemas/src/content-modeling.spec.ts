@@ -7,6 +7,7 @@ import {
   contentEntryReviewCreateSchema,
   contentEntryStatusSchema,
   contentEntryStatusUpdateSchema,
+  contentEntryTransitionAuditMetadataSchema,
   contentEntryWorkflowTransitions,
   contentSchemaVersionSchema,
   contentTypeCreateSchema,
@@ -165,6 +166,45 @@ describe("content modeling contracts", () => {
     });
     expect(findContentEntryWorkflowTransition("DRAFT", "PUBLISHED")).toBeUndefined();
     expect(findContentEntryWorkflowTransition("ARCHIVED", "PUBLISHED")).toBeUndefined();
+  });
+
+  it("validates the audit contract for every workflow transition", () => {
+    for (const [index, transition] of contentEntryWorkflowTransitions.entries()) {
+      expect(
+        contentEntryTransitionAuditMetadataSchema.parse({
+          from: transition.from,
+          previousRevision: index + 1,
+          revision: index + 2,
+          siteId: "a11f740b-f15f-4279-8ca2-3877a4cae775",
+          to: transition.to,
+          transition: transition.action,
+        }),
+      ).toMatchObject({
+        from: transition.from,
+        to: transition.to,
+        transition: transition.action,
+      });
+    }
+    expect(
+      contentEntryTransitionAuditMetadataSchema.safeParse({
+        from: "DRAFT",
+        previousRevision: 1,
+        revision: 2,
+        siteId: "a11f740b-f15f-4279-8ca2-3877a4cae775",
+        to: "IN_REVIEW",
+        transition: "PUBLISH",
+      }).success,
+    ).toBe(false);
+    expect(
+      contentEntryTransitionAuditMetadataSchema.safeParse({
+        from: "DRAFT",
+        previousRevision: 1,
+        revision: 3,
+        siteId: "a11f740b-f15f-4279-8ca2-3877a4cae775",
+        to: "IN_REVIEW",
+        transition: "SUBMIT_FOR_REVIEW",
+      }).success,
+    ).toBe(false);
   });
 
   it("validates bounded editorial assignments and comments", () => {

@@ -4,6 +4,7 @@ import {
   contentEntryAssignmentCreateSchema,
   contentEntryCommentCreateSchema,
   contentEntryReviewCreateSchema,
+  findContentEntryWorkflowTransition,
   type ContentEntryAssignmentCreateInput,
   type ContentEntryCommentCreateInput,
   type ContentEntryReviewCreateInput,
@@ -17,6 +18,12 @@ import {
   InvalidContentPageError,
 } from "./content-admin.service.js";
 import { ContentMetrics } from "./content-metrics.js";
+import {
+  contentEntryTransitionAuditAction,
+  contentEntryTransitionAuditData,
+  contentEntryTransitionAuditEntity,
+  contentEntryTransitionAuditRecord,
+} from "./content-transition-audit.js";
 
 const defaultPageSize = 25;
 const maximumPageSize = 100;
@@ -49,6 +56,12 @@ const reviewEntrySelection = {
   revision: true,
   status: true,
   updatedAt: true,
+} as const;
+const transitionAuditSelection = {
+  actorId: true,
+  createdAt: true,
+  id: true,
+  metadata: true,
 } as const;
 
 export type CollaborationPageInput = {
@@ -150,6 +163,36 @@ export class ContentCollaborationService {
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
   ) {}
+
+  async listTransitions(siteId: string, contentEntryId: string, input: CollaborationPageInput) {
+    const page = parsePage(input);
+    await this.requireEntry(this.prisma, siteId, contentEntryId);
+    const where: Prisma.AuditEventWhereInput = {
+      action: contentEntryTransitionAuditAction,
+      entity: contentEntryTransitionAuditEntity,
+      entityId: contentEntryId,
+      metadata: { path: ["siteId"], equals: siteId },
+    };
+    if (page.cursor) {
+      const cursor = await this.prisma.auditEvent.findFirst({
+        select: { id: true },
+        where: { ...where, id: page.cursor },
+      });
+      if (!cursor) {
+        throw new InvalidContentPageError();
+      }
+    }
+
+    const records = await this.prisma.auditEvent.findMany({
+      cursor: page.cursor ? { id: page.cursor } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: transitionAuditSelection,
+      skip: page.cursor ? 1 : 0,
+      take: page.limit + 1,
+      where,
+    });
+    return this.page(records.map(contentEntryTransitionAuditRecord), page.limit);
+  }
 
   async listAssignments(siteId: string, contentEntryId: string, input: CollaborationPageInput) {
     const page = parsePage(input);
@@ -413,21 +456,19 @@ export class ContentCollaborationService {
           },
         });
         if (command.decision === "CHANGES_REQUESTED") {
+          const transition = findContentEntryWorkflowTransition("IN_REVIEW", "DRAFT");
+          if (!transition) {
+            throw new ContentEntryReviewStateConflictError();
+          }
           await transaction.auditEvent.create({
-            data: {
-              action: "content.entry.status.changed",
+            data: contentEntryTransitionAuditData({
               actorId,
-              entity: "ContentEntry",
-              entityId: contentEntryId,
-              metadata: {
-                from: "IN_REVIEW",
-                previousRevision: expectedRevision,
-                revision: entry.revision,
-                siteId,
-                transition: "RETURN_TO_DRAFT",
-                to: "DRAFT",
-              },
-            },
+              contentEntryId,
+              previousRevision: expectedRevision,
+              revision: entry.revision,
+              siteId,
+              transition,
+            }),
           });
         }
         return { entry, review };

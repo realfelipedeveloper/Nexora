@@ -104,6 +104,22 @@ export class ContentCollaborationController {
     private readonly collaboration: ContentCollaborationService,
   ) {}
 
+  @Get("transitions")
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.read")
+  async listTransitions(
+    @Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string,
+    @Param("contentEntryId", new ParseUUIDPipe({ version: "4" })) contentEntryId: string,
+    @Query("limit") limit: string | undefined,
+    @Query("cursor") cursor: string | undefined,
+  ) {
+    try {
+      return await this.collaboration.listTransitions(siteId, contentEntryId, { cursor, limit });
+    } catch (error) {
+      mapCollaborationError(error);
+    }
+  }
+
   @Get("assignments")
   @Header("Cache-Control", "no-store")
   @RequireSitePermissions("content.read")

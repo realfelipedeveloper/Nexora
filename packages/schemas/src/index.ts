@@ -90,6 +90,17 @@ export const contentEntryStatusSchema = z.enum(contentEntryStatuses);
 
 export type ContentEntryStatus = z.infer<typeof contentEntryStatusSchema>;
 
+export const contentEntryWorkflowActions = [
+  "SUBMIT_FOR_REVIEW",
+  "RETURN_TO_DRAFT",
+  "PUBLISH",
+  "UNPUBLISH",
+  "ARCHIVE",
+  "RESTORE",
+] as const;
+
+export const contentEntryWorkflowActionSchema = z.enum(contentEntryWorkflowActions);
+
 export const contentEntryWorkflowTransitions = Object.freeze([
   { action: "SUBMIT_FOR_REVIEW", from: "DRAFT", to: "IN_REVIEW" },
   { action: "RETURN_TO_DRAFT", from: "IN_REVIEW", to: "DRAFT" },
@@ -113,6 +124,37 @@ export function findContentEntryWorkflowTransition(
     (transition) => transition.from === from && transition.to === to,
   );
 }
+
+export const contentEntryTransitionAuditMetadataSchema = z
+  .strictObject({
+    from: contentEntryStatusSchema,
+    previousRevision: z.number().int().positive(),
+    revision: z.number().int().positive(),
+    siteId: z.string().uuid(),
+    to: contentEntryStatusSchema,
+    transition: contentEntryWorkflowActionSchema,
+  })
+  .superRefine((metadata, context) => {
+    const transition = findContentEntryWorkflowTransition(metadata.from, metadata.to);
+    if (transition?.action !== metadata.transition) {
+      context.addIssue({
+        code: "custom",
+        message: "Audit metadata must describe a valid workflow transition.",
+        path: ["transition"],
+      });
+    }
+    if (metadata.revision !== metadata.previousRevision + 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Audit metadata revision must advance exactly once.",
+        path: ["revision"],
+      });
+    }
+  });
+
+export type ContentEntryTransitionAuditMetadata = z.infer<
+  typeof contentEntryTransitionAuditMetadataSchema
+>;
 
 export const contentLocaleDataSchema = z.record(z.string(), z.unknown());
 

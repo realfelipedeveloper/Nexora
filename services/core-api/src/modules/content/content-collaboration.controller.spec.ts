@@ -57,6 +57,7 @@ function fixture() {
     listAssignments: vi.fn(),
     listComments: vi.fn(),
     listReviews: vi.fn(),
+    listTransitions: vi.fn(),
     createReview: vi.fn(),
   };
   return {
@@ -73,6 +74,13 @@ describe("content collaboration controller", () => {
     service.listAssignments.mockResolvedValue({ items: [] });
     service.listComments.mockResolvedValue({ items: [] });
     service.listReviews.mockResolvedValue({ items: [] });
+    service.listTransitions.mockResolvedValue({ items: [] });
+
+    await controller.listTransitions("site-1", "entry-1", "5", "transition-cursor");
+    expect(service.listTransitions).toHaveBeenCalledWith("site-1", "entry-1", {
+      cursor: "transition-cursor",
+      limit: "5",
+    });
 
     await controller.listAssignments("site-1", "entry-1", "10", "assignment-cursor");
     expect(service.listAssignments).toHaveBeenCalledWith("site-1", "entry-1", {
