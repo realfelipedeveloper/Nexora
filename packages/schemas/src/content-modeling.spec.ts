@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   contentLocaleDataSchema,
+  contentEntryAssignmentCreateSchema,
+  contentEntryCommentCreateSchema,
   contentEntryCreateSchema,
   contentEntryStatusSchema,
   contentEntryStatusUpdateSchema,
@@ -162,5 +164,23 @@ describe("content modeling contracts", () => {
     });
     expect(findContentEntryWorkflowTransition("DRAFT", "PUBLISHED")).toBeUndefined();
     expect(findContentEntryWorkflowTransition("ARCHIVED", "PUBLISHED")).toBeUndefined();
+  });
+
+  it("validates bounded editorial assignments and comments", () => {
+    expect(
+      contentEntryAssignmentCreateSchema.parse({
+        assigneeId: "a11f740b-f15f-4279-8ca2-3877a4cae775",
+      }),
+    ).toEqual({ assigneeId: "a11f740b-f15f-4279-8ca2-3877a4cae775" });
+    expect(contentEntryAssignmentCreateSchema.safeParse({ assigneeId: "not-a-uuid" }).success).toBe(
+      false,
+    );
+    expect(contentEntryCommentCreateSchema.parse({ body: "  Review the title.  " })).toEqual({
+      body: "Review the title.",
+    });
+    expect(contentEntryCommentCreateSchema.safeParse({ body: "   " }).success).toBe(false);
+    expect(contentEntryCommentCreateSchema.safeParse({ body: "x".repeat(4_001) }).success).toBe(
+      false,
+    );
   });
 });

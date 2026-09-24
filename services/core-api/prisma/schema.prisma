@@ -35,9 +35,12 @@ model User {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  sessions            Session[]
-  siteRoleAssignments SiteRoleAssignment[] @relation("SiteRoleUser")
-  siteRoleGrants      SiteRoleAssignment[] @relation("SiteRoleGrantedBy")
+  sessions                Session[]
+  siteRoleAssignments     SiteRoleAssignment[]     @relation("SiteRoleUser")
+  siteRoleGrants          SiteRoleAssignment[]     @relation("SiteRoleGrantedBy")
+  contentAssignments      ContentEntryAssignment[] @relation("ContentEntryAssignee")
+  contentAssignmentGrants ContentEntryAssignment[] @relation("ContentEntryAssignedBy")
+  editorialComments       ContentEntryComment[]
 }
 
 model Session {
@@ -63,11 +66,13 @@ model Site {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  locales         Locale[]
-  contentTypes    ContentType[]
-  contentEntries  ContentEntry[]
-  roleAssignments SiteRoleAssignment[]
-  settings        SiteSetting[]
+  locales            Locale[]
+  contentTypes       ContentType[]
+  contentEntries     ContentEntry[]
+  contentAssignments ContentEntryAssignment[]
+  editorialComments  ContentEntryComment[]
+  roleAssignments    SiteRoleAssignment[]
+  settings           SiteSetting[]
 
   @@index([status])
 }
@@ -220,11 +225,47 @@ model ContentEntry {
   contentType              ContentType              @relation(fields: [contentTypeId, siteId], references: [id, siteId], onDelete: Restrict)
   contentTypeSchemaVersion ContentTypeSchemaVersion @relation(fields: [contentTypeId, siteId, schemaVersion], references: [contentTypeId, siteId, version], onDelete: Restrict)
   contentLocales           ContentLocale[]
+  assignments              ContentEntryAssignment[]
+  editorialComments        ContentEntryComment[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
   @@index([siteId, contentTypeId, status, publishedAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, status, updatedAt])
+}
+
+model ContentEntryAssignment {
+  id             String   @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  assigneeId     String
+  assignedById   String
+  createdAt      DateTime @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  assignee     User         @relation("ContentEntryAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  assignedBy   User         @relation("ContentEntryAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@unique([contentEntryId, siteId, assigneeId])
+  @@index([siteId, assigneeId, createdAt])
+  @@index([assignedById])
+}
+
+model ContentEntryComment {
+  id             String   @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  authorId       String
+  body           String   @db.VarChar(4000)
+  createdAt      DateTime @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([contentEntryId, siteId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([siteId, authorId, createdAt])
 }
 
 model ContentLocale {

@@ -18,6 +18,8 @@ import {
   ContentTypesController,
 } from "./content/content-admin.controller.js";
 import { ContentAdminService } from "./content/content-admin.service.js";
+import { ContentCollaborationController } from "./content/content-collaboration.controller.js";
+import { ContentCollaborationService } from "./content/content-collaboration.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
 import { PublicContentController } from "./content/content-public.controller.js";
@@ -744,6 +746,7 @@ describe("PostgreSQL migrations and integration", () => {
 
     const moduleRef = await Test.createTestingModule({
       controllers: [
+        ContentCollaborationController,
         ContentEntriesController,
         ContentTypesController,
         IdentityController,
@@ -751,6 +754,7 @@ describe("PostgreSQL migrations and integration", () => {
       ],
       providers: [
         ContentAdminService,
+        ContentCollaborationService,
         ContentFieldValidator,
         ContentMetrics,
         PublicContentService,
@@ -947,6 +951,131 @@ describe("PostgreSQL migrations and integration", () => {
         .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", viewerSession.cookie)
         .expect(200);
+
+      const collaborationPath = `/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`;
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/assignments`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({ assigneeId: editor.id })
+        .expect(403);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/comments`)
+        .set("Cookie", viewerSession.cookie)
+        .set("x-csrf-token", viewerSession.csrfToken)
+        .send({ body: "Viewer comment" })
+        .expect(403);
+
+      const assignment = await request(app.getHttpServer())
+        .post(`${collaborationPath}/assignments`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .send({ assigneeId: editor.id })
+        .expect(201);
+      expect(assignment.body).toMatchObject({
+        assignedBy: { id: publisher.id },
+        assignee: { id: editor.id },
+      });
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/assignments`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .send({ assigneeId: editor.id })
+        .expect(409);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/assignments`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .send({ assigneeId: viewer.id })
+        .expect(404);
+
+      const listedAssignments = await request(app.getHttpServer())
+        .get(`${collaborationPath}/assignments?limit=1`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
+      expect(listedAssignments.body).toEqual({
+        items: [expect.objectContaining({ id: assignment.body.id })],
+      });
+
+      const firstCommentBody = "Review the institutional title.";
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/comments`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({ body: "   " })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/comments`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .send({ body: firstCommentBody })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/comments`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .send({ body: "Ready for the next workflow step." })
+        .expect(201);
+
+      const firstCommentPage = await request(app.getHttpServer())
+        .get(`${collaborationPath}/comments?limit=1`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
+      expect(firstCommentPage.body.items).toHaveLength(1);
+      expect(firstCommentPage.body.nextCursor).toEqual(expect.any(String));
+      const secondCommentPage = await request(app.getHttpServer())
+        .get(
+          `${collaborationPath}/comments?limit=1&cursor=${firstCommentPage.body.nextCursor as string}`,
+        )
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
+      expect(secondCommentPage.body.items).toHaveLength(1);
+      expect(secondCommentPage.body).not.toHaveProperty("nextCursor");
+
+      await request(app.getHttpServer())
+        .get(
+          `/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}/comments`,
+        )
+        .set("Cookie", cookie)
+        .expect(404);
+      await expect(
+        prisma.contentEntryAssignment.create({
+          data: {
+            assignedById: publisher.id,
+            assigneeId: editor.id,
+            contentEntryId: createdEntry.body.id as string,
+            siteId: secondarySite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+
+      await request(app.getHttpServer())
+        .delete(`${collaborationPath}/assignments/${assignment.body.id as string}`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .expect(403);
+      await request(app.getHttpServer())
+        .delete(`${collaborationPath}/assignments/${assignment.body.id as string}`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .expect(204);
+
+      const collaborationAuditEvents = await prisma.auditEvent.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { action: true, actorId: true, metadata: true },
+        where: {
+          action: { startsWith: "content.entry." },
+          entity: { in: ["ContentEntryAssignment", "ContentEntryComment"] },
+          metadata: { path: ["siteId"], equals: primarySite.id },
+        },
+      });
+      expect(collaborationAuditEvents.map(({ action }) => action)).toEqual([
+        "content.entry.assignment.created",
+        "content.entry.comment.created",
+        "content.entry.comment.created",
+        "content.entry.assignment.deleted",
+      ]);
+      expect(JSON.stringify(collaborationAuditEvents)).not.toContain(firstCommentBody);
 
       await request(app.getHttpServer())
         .get(
@@ -1217,6 +1346,11 @@ describe("PostgreSQL migrations and integration", () => {
         .set("x-csrf-token", csrfToken)
         .set("If-Match", '"5"')
         .expect(204);
+      await expect(
+        prisma.contentEntryComment.count({
+          where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
+        }),
+      ).resolves.toBe(0);
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
@@ -1261,6 +1395,15 @@ describe("PostgreSQL migrations and integration", () => {
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
 
       const metrics = moduleRef.get(ContentMetrics).render();
+      expect(metrics).toContain(
+        'nexora_content_collaboration_mutations_total{operation="assignment_created"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_collaboration_mutations_total{operation="assignment_deleted"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_collaboration_mutations_total{operation="comment_created"} 2',
+      );
       expect(metrics).toContain("nexora_content_precondition_failures_total 4");
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 1',
