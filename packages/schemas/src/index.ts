@@ -297,6 +297,25 @@ export const contentEntryCommentCreateSchema = z.strictObject({
   body: z.string().trim().min(1).max(4_000),
 });
 
+export const contentEntryReviewDecisions = ["APPROVED", "CHANGES_REQUESTED"] as const;
+
+export const contentEntryReviewDecisionSchema = z.enum(contentEntryReviewDecisions);
+
+export const contentEntryReviewCreateSchema = z
+  .strictObject({
+    decision: contentEntryReviewDecisionSchema,
+    note: z.string().trim().min(1).max(4_000).optional(),
+  })
+  .superRefine((review, context) => {
+    if (review.decision === "CHANGES_REQUESTED" && review.note === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "A note is required when requesting changes.",
+        path: ["note"],
+      });
+    }
+  });
+
 export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>;
 export type ContentTypeCreateInput = z.infer<typeof contentTypeCreateSchema>;
 export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
@@ -305,3 +324,5 @@ export type ContentEntryUpdateInput = z.infer<typeof contentEntryUpdateSchema>;
 export type ContentEntryStatusUpdateInput = z.infer<typeof contentEntryStatusUpdateSchema>;
 export type ContentEntryAssignmentCreateInput = z.infer<typeof contentEntryAssignmentCreateSchema>;
 export type ContentEntryCommentCreateInput = z.infer<typeof contentEntryCommentCreateSchema>;
+export type ContentEntryReviewDecision = z.infer<typeof contentEntryReviewDecisionSchema>;
+export type ContentEntryReviewCreateInput = z.infer<typeof contentEntryReviewCreateSchema>;

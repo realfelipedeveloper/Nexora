@@ -3,12 +3,16 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import {
   contentEntryAssignmentCreateSchema,
   contentEntryCommentCreateSchema,
+  contentEntryReviewCreateSchema,
   type ContentEntryAssignmentCreateInput,
   type ContentEntryCommentCreateInput,
+  type ContentEntryReviewCreateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { hasSitePermissions, type SiteAccess } from "../identity/site-permissions.js";
 import {
   ContentEntryNotFoundError,
+  ContentPreconditionFailedError,
   InvalidContentInputError,
   InvalidContentPageError,
 } from "./content-admin.service.js";
@@ -30,6 +34,21 @@ const commentSelection = {
   body: true,
   createdAt: true,
   id: true,
+} as const;
+const reviewSelection = {
+  contentRevision: true,
+  createdAt: true,
+  decision: true,
+  id: true,
+  note: true,
+  reviewer: { select: userSelection },
+} as const;
+const reviewEntrySelection = {
+  id: true,
+  publishedAt: true,
+  revision: true,
+  status: true,
+  updatedAt: true,
 } as const;
 
 export type CollaborationPageInput = {
@@ -61,6 +80,30 @@ export class ContentEntryAssigneeUnavailableError extends Error {
   }
 }
 
+export class ContentEntryReviewConflictError extends Error {
+  override readonly name = "ContentEntryReviewConflictError";
+
+  constructor() {
+    super("This review decision was already recorded for the content revision.");
+  }
+}
+
+export class ContentEntryReviewForbiddenError extends Error {
+  override readonly name = "ContentEntryReviewForbiddenError";
+
+  constructor() {
+    super("Editorial review is not permitted for this site access.");
+  }
+}
+
+export class ContentEntryReviewStateConflictError extends Error {
+  override readonly name = "ContentEntryReviewStateConflictError";
+
+  constructor() {
+    super("Only content in review can receive an editorial decision.");
+  }
+}
+
 function isPrismaError(error: unknown, code: string) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
@@ -87,6 +130,14 @@ function parseAssignment(input: unknown): ContentEntryAssignmentCreateInput {
 
 function parseComment(input: unknown): ContentEntryCommentCreateInput {
   const result = contentEntryCommentCreateSchema.safeParse(input);
+  if (!result.success) {
+    throw new InvalidContentInputError();
+  }
+  return result.data;
+}
+
+function parseReview(input: unknown): ContentEntryReviewCreateInput {
+  const result = contentEntryReviewCreateSchema.safeParse(input);
   if (!result.success) {
     throw new InvalidContentInputError();
   }
@@ -262,6 +313,138 @@ export class ContentCollaborationService {
     return comment;
   }
 
+  async listReviews(siteId: string, contentEntryId: string, input: CollaborationPageInput) {
+    const page = parsePage(input);
+    await this.requireEntry(this.prisma, siteId, contentEntryId);
+    if (page.cursor) {
+      const cursor = await this.prisma.contentEntryReview.findFirst({
+        select: { id: true },
+        where: { contentEntryId, id: page.cursor, siteId },
+      });
+      if (!cursor) {
+        throw new InvalidContentPageError();
+      }
+    }
+
+    const records = await this.prisma.contentEntryReview.findMany({
+      cursor: page.cursor ? { id: page.cursor } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: reviewSelection,
+      skip: page.cursor ? 1 : 0,
+      take: page.limit + 1,
+      where: { contentEntryId, siteId },
+    });
+    return this.page(records, page.limit);
+  }
+
+  async createReview(
+    actorId: string,
+    siteId: string,
+    access: SiteAccess,
+    contentEntryId: string,
+    expectedRevision: number,
+    input: unknown,
+  ) {
+    const command = parseReview(input);
+    if (access.siteId !== siteId || !hasSitePermissions(access, ["content.publish"])) {
+      throw new ContentEntryReviewForbiddenError();
+    }
+
+    try {
+      const result = await this.prisma.$transaction(async (transaction) => {
+        const current = await transaction.contentEntry.findUnique({
+          select: { id: true, revision: true, status: true },
+          where: { id_siteId: { id: contentEntryId, siteId } },
+        });
+        if (!current) {
+          throw new ContentEntryNotFoundError();
+        }
+        if (current.revision !== expectedRevision) {
+          this.preconditionFailed();
+        }
+        if (current.status !== "IN_REVIEW") {
+          throw new ContentEntryReviewStateConflictError();
+        }
+
+        const changed = await transaction.contentEntry.updateMany({
+          data:
+            command.decision === "CHANGES_REQUESTED"
+              ? { publishedAt: null, revision: { increment: 1 }, status: "DRAFT" }
+              : { updatedAt: new Date() },
+          where: {
+            id: contentEntryId,
+            revision: expectedRevision,
+            siteId,
+            status: "IN_REVIEW",
+          },
+        });
+        if (changed.count !== 1) {
+          this.preconditionFailed();
+        }
+
+        const review = await transaction.contentEntryReview.create({
+          data: {
+            contentEntryId,
+            contentRevision: expectedRevision,
+            decision: command.decision,
+            note: command.note,
+            reviewerId: actorId,
+            siteId,
+          },
+          select: reviewSelection,
+        });
+        const entry = await transaction.contentEntry.findUniqueOrThrow({
+          select: reviewEntrySelection,
+          where: { id_siteId: { id: contentEntryId, siteId } },
+        });
+        await transaction.auditEvent.create({
+          data: {
+            action: "content.entry.review.created",
+            actorId,
+            entity: "ContentEntryReview",
+            entityId: review.id,
+            metadata: {
+              contentEntryId,
+              contentRevision: expectedRevision,
+              decision: command.decision,
+              resultingRevision: entry.revision,
+              siteId,
+            },
+          },
+        });
+        if (command.decision === "CHANGES_REQUESTED") {
+          await transaction.auditEvent.create({
+            data: {
+              action: "content.entry.status.changed",
+              actorId,
+              entity: "ContentEntry",
+              entityId: contentEntryId,
+              metadata: {
+                from: "IN_REVIEW",
+                previousRevision: expectedRevision,
+                revision: entry.revision,
+                siteId,
+                transition: "RETURN_TO_DRAFT",
+                to: "DRAFT",
+              },
+            },
+          });
+        }
+        return { entry, review };
+      });
+      this.metrics.recordReviewDecision(command.decision);
+      if (command.decision === "CHANGES_REQUESTED") {
+        this.metrics.recordStateTransition("IN_REVIEW", "DRAFT");
+      }
+      return result;
+    } catch (error) {
+      if (isPrismaError(error, "P2002")) {
+        throw new ContentEntryReviewConflictError();
+      }
+      throw error;
+    }
+  }
+
   private async requireEntry(
     client: Pick<PrismaClient, "contentEntry"> | Prisma.TransactionClient,
     siteId: string,
@@ -280,5 +463,10 @@ export class ContentCollaborationService {
     const hasNextPage = records.length > limit;
     const items = hasNextPage ? records.slice(0, limit) : records;
     return { items, nextCursor: hasNextPage ? items.at(-1)?.id : undefined };
+  }
+
+  private preconditionFailed(): never {
+    this.metrics.recordPreconditionFailure();
+    throw new ContentPreconditionFailedError();
   }
 }

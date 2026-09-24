@@ -23,6 +23,11 @@ enum ContentEntryStatus {
   ARCHIVED
 }
 
+enum ContentEntryReviewDecision {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -41,6 +46,7 @@ model User {
   contentAssignments      ContentEntryAssignment[] @relation("ContentEntryAssignee")
   contentAssignmentGrants ContentEntryAssignment[] @relation("ContentEntryAssignedBy")
   editorialComments       ContentEntryComment[]
+  editorialReviews        ContentEntryReview[]
 }
 
 model Session {
@@ -71,6 +77,7 @@ model Site {
   contentEntries     ContentEntry[]
   contentAssignments ContentEntryAssignment[]
   editorialComments  ContentEntryComment[]
+  editorialReviews   ContentEntryReview[]
   roleAssignments    SiteRoleAssignment[]
   settings           SiteSetting[]
 
@@ -227,6 +234,7 @@ model ContentEntry {
   contentLocales           ContentLocale[]
   assignments              ContentEntryAssignment[]
   editorialComments        ContentEntryComment[]
+  editorialReviews         ContentEntryReview[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
@@ -266,6 +274,25 @@ model ContentEntryComment {
 
   @@index([contentEntryId, siteId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, authorId, createdAt])
+}
+
+model ContentEntryReview {
+  id              String                     @id @default(uuid())
+  siteId          String
+  contentEntryId  String
+  reviewerId      String
+  decision        ContentEntryReviewDecision
+  contentRevision Int
+  note            String?                    @db.VarChar(4000)
+  createdAt       DateTime                   @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  reviewer     User         @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@unique([contentEntryId, siteId, contentRevision, reviewerId, decision])
+  @@index([contentEntryId, siteId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([siteId, reviewerId, createdAt])
 }
 
 model ContentLocale {
