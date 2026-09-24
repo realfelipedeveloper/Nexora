@@ -18,6 +18,7 @@ import { InjectPrismaClient } from "../../database/database.module.js";
 import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentMetrics } from "./content-metrics.js";
+import { contentEntryTransitionAuditData } from "./content-transition-audit.js";
 import { canSetContentWorkflowState } from "./content-workflow-authorization.js";
 
 const defaultPageSize = 25;
@@ -718,20 +719,14 @@ export class ContentAdminService {
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
       await transaction.auditEvent.create({
-        data: {
-          action: "content.entry.status.changed",
+        data: contentEntryTransitionAuditData({
           actorId,
-          entity: "ContentEntry",
-          entityId: contentEntryId,
-          metadata: {
-            from: current.status,
-            previousRevision: expectedRevision,
-            revision,
-            siteId,
-            transition: workflowTransition.action,
-            to: entry.status,
-          },
-        },
+          contentEntryId,
+          previousRevision: expectedRevision,
+          revision,
+          siteId,
+          transition: workflowTransition,
+        }),
       });
       transition = workflowTransition;
       return entry;

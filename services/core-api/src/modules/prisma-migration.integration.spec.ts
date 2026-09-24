@@ -1433,6 +1433,81 @@ describe("PostgreSQL migrations and integration", () => {
         },
       });
 
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"7"')
+        .send({ status: "IN_REVIEW" })
+        .expect(200)
+        .expect("ETag", '"8"');
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"8"')
+        .send({ decision: "APPROVED" })
+        .expect(201)
+        .expect("ETag", '"8"');
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"8"')
+        .send({ status: "PUBLISHED" })
+        .expect(200)
+        .expect("ETag", '"9"');
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"9"')
+        .send({ status: "ARCHIVED" })
+        .expect(200)
+        .expect("ETag", '"10"');
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"10"')
+        .send({ status: "DRAFT" })
+        .expect(200)
+        .expect("ETag", '"11"');
+
+      const firstTransitionPage = await request(app.getHttpServer())
+        .get(`${collaborationPath}/transitions?limit=2`)
+        .set("Cookie", cookie)
+        .expect(200)
+        .expect("Cache-Control", "no-store");
+      expect(
+        firstTransitionPage.body.items.map((item: { transition: string }) => item.transition),
+      ).toEqual(["RESTORE", "ARCHIVE"]);
+      expect(firstTransitionPage.body.nextCursor).toBe(firstTransitionPage.body.items[1]?.id);
+      const remainingTransitionPage = await request(app.getHttpServer())
+        .get(
+          `${collaborationPath}/transitions?limit=100&cursor=${String(firstTransitionPage.body.nextCursor)}`,
+        )
+        .set("Cookie", cookie)
+        .expect(200);
+      expect(
+        remainingTransitionPage.body.items.map((item: { transition: string }) => item.transition),
+      ).toEqual([
+        "PUBLISH",
+        "SUBMIT_FOR_REVIEW",
+        "RETURN_TO_DRAFT",
+        "SUBMIT_FOR_REVIEW",
+        "UNPUBLISH",
+        "PUBLISH",
+        "SUBMIT_FOR_REVIEW",
+      ]);
+      expect(JSON.stringify(firstTransitionPage.body)).not.toContain(changesNote);
+      await request(app.getHttpServer())
+        .get(
+          `/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}/transitions`,
+        )
+        .set("Cookie", cookie)
+        .expect(404);
+
       const reviewAuditEvents = await prisma.auditEvent.findMany({
         select: { action: true, metadata: true },
         where: {
@@ -1440,14 +1515,14 @@ describe("PostgreSQL migrations and integration", () => {
           metadata: { path: ["siteId"], equals: primarySite.id },
         },
       });
-      expect(reviewAuditEvents).toHaveLength(2);
+      expect(reviewAuditEvents).toHaveLength(3);
       expect(JSON.stringify(reviewAuditEvents)).not.toContain(changesNote);
 
       await request(app.getHttpServer())
         .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .expect(200)
-        .expect("ETag", '"7"');
+        .expect("ETag", '"11"');
 
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
@@ -1459,7 +1534,7 @@ describe("PostgreSQL migrations and integration", () => {
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"7"')
+        .set("If-Match", '"11"')
         .expect(204);
       await expect(
         prisma.contentEntryComment.count({
@@ -1506,6 +1581,10 @@ describe("PostgreSQL migrations and integration", () => {
         "content.entry.status.changed",
         "content.entry.status.changed",
         "content.entry.status.changed",
+        "content.entry.status.changed",
+        "content.entry.status.changed",
+        "content.entry.status.changed",
+        "content.entry.status.changed",
         "content.entry.deleted",
         "content.type.deleted",
       ]);
@@ -1513,7 +1592,17 @@ describe("PostgreSQL migrations and integration", () => {
         auditEvents
           .filter(({ action }) => action === "content.entry.status.changed")
           .map(({ actorId }) => actorId),
-      ).toEqual([editor.id, publisher.id, publisher.id, editor.id, publisher.id]);
+      ).toEqual([
+        editor.id,
+        publisher.id,
+        publisher.id,
+        editor.id,
+        publisher.id,
+        editor.id,
+        publisher.id,
+        publisher.id,
+        publisher.id,
+      ]);
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
 
       const metrics = moduleRef.get(ContentMetrics).render();
@@ -1526,22 +1615,28 @@ describe("PostgreSQL migrations and integration", () => {
       expect(metrics).toContain(
         'nexora_content_collaboration_mutations_total{operation="comment_created"} 2',
       );
-      expect(metrics).toContain('nexora_content_review_decisions_total{decision="APPROVED"} 1');
+      expect(metrics).toContain('nexora_content_review_decisions_total{decision="APPROVED"} 2');
       expect(metrics).toContain(
         'nexora_content_review_decisions_total{decision="CHANGES_REQUESTED"} 1',
       );
       expect(metrics).toContain("nexora_content_precondition_failures_total 5");
       expect(metrics).toContain(
-        'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 2',
+        'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 3',
       );
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="IN_REVIEW",to="DRAFT"} 1',
       );
       expect(metrics).toContain(
-        'nexora_content_state_transitions_total{from="IN_REVIEW",to="PUBLISHED"} 1',
+        'nexora_content_state_transitions_total{from="IN_REVIEW",to="PUBLISHED"} 2',
       );
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="PUBLISHED",to="DRAFT"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="PUBLISHED",to="ARCHIVED"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="ARCHIVED",to="DRAFT"} 1',
       );
     } finally {
       await app.close();
