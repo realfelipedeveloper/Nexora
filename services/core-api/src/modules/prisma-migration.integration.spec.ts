@@ -27,6 +27,8 @@ import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
 import { PublicContentController } from "./content/content-public.controller.js";
 import { PublicContentService } from "./content/content-public.service.js";
+import { ContentVersioningController } from "./content/content-versioning.controller.js";
+import { ContentVersioningService } from "./content/content-versioning.service.js";
 import { configureHttpSecurity } from "./http-security.js";
 import {
   AdminAlreadyProvisionedError,
@@ -802,6 +804,7 @@ describe("PostgreSQL migrations and integration", () => {
         ContentCollaborationController,
         ContentEntriesController,
         ContentTypesController,
+        ContentVersioningController,
         IdentityController,
         PublicContentController,
       ],
@@ -810,6 +813,7 @@ describe("PostgreSQL migrations and integration", () => {
         ContentCollaborationService,
         ContentFieldValidator,
         ContentMetrics,
+        ContentVersioningService,
         PublicContentService,
         IdentityService,
         Reflector,
@@ -1609,6 +1613,61 @@ describe("PostgreSQL migrations and integration", () => {
         .expect(200)
         .expect("ETag", '"11"');
 
+      const comparisonPath = `/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/revisions/compare`;
+      const revisionComparison = await request(app.getHttpServer())
+        .get(`${comparisonPath}?from=1&to=2`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200)
+        .expect("Cache-Control", "no-store");
+      expect(revisionComparison.body).toMatchObject({
+        contentEntryId: createdEntry.body.id,
+        contentTypeId: createdType.body.id,
+        from: {
+          actorId: editor.id,
+          revision: 1,
+          schemaVersion: 2,
+          status: "DRAFT",
+        },
+        to: {
+          actorId: editor.id,
+          revision: 2,
+          schemaVersion: 2,
+          status: "DRAFT",
+        },
+      });
+      expect(revisionComparison.body.fieldChanges).toEqual([
+        {
+          after: "Updated summary",
+          change: "ADDED",
+          fieldKey: "summary",
+          localeCode: "pt-BR",
+          localeId: primaryLocale.id,
+        },
+      ]);
+      await request(app.getHttpServer())
+        .get(`${comparisonPath}?from=2&to=2`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200)
+        .expect(({ body }) => expect(body.fieldChanges).toEqual([]));
+      await request(app.getHttpServer())
+        .get(`${comparisonPath}?from=0&to=2`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(400);
+      await request(app.getHttpServer())
+        .get(`${comparisonPath}?from=2147483648&to=2`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(400);
+      await request(app.getHttpServer())
+        .get(`${comparisonPath}?from=999&to=2`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(404);
+      await request(app.getHttpServer())
+        .get(
+          `/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}/revisions/compare?from=1&to=2`,
+        )
+        .set("Cookie", cookie)
+        .expect(404);
+
       const snapshots = await prisma.contentEntrySnapshot.findMany({
         orderBy: { revision: "asc" },
         where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
@@ -1756,6 +1815,9 @@ describe("PostgreSQL migrations and integration", () => {
       expect(metrics).toContain(
         'nexora_content_collaboration_mutations_total{operation="comment_created"} 2',
       );
+      expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="invalid"} 2');
+      expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="not_found"} 2');
+      expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="success"} 2');
       expect(metrics).toContain('nexora_content_review_decisions_total{decision="APPROVED"} 2');
       expect(metrics).toContain(
         'nexora_content_review_decisions_total{decision="CHANGES_REQUESTED"} 1',
