@@ -17,6 +17,7 @@ import {
   InvalidContentInputError,
   InvalidContentPageError,
 } from "./content-admin.service.js";
+import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { ContentMetrics } from "./content-metrics.js";
 import {
   contentEntryTransitionAuditAction,
@@ -440,6 +441,9 @@ export class ContentCollaborationService {
           select: reviewEntrySelection,
           where: { id_siteId: { id: contentEntryId, siteId } },
         });
+        if (command.decision === "CHANGES_REQUESTED") {
+          await createContentEntrySnapshot(transaction, actorId, siteId, contentEntryId);
+        }
         await transaction.auditEvent.create({
           data: {
             action: "content.entry.review.created",

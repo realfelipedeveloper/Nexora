@@ -17,6 +17,7 @@ import {
 import { InjectPrismaClient } from "../../database/database.module.js";
 import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
+import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { contentEntryTransitionAuditData } from "./content-transition-audit.js";
 import { canSetContentWorkflowState } from "./content-workflow-authorization.js";
@@ -537,6 +538,7 @@ export class ContentAdminService {
         },
         select: contentEntryDetailSelection,
       });
+      await createContentEntrySnapshot(transaction, actorId, siteId, entry.id);
       await transaction.auditEvent.create({
         data: {
           action: "content.entry.created",
@@ -630,6 +632,7 @@ export class ContentAdminService {
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
+      await createContentEntrySnapshot(transaction, actorId, siteId, contentEntryId);
       await transaction.auditEvent.create({
         data: {
           action: "content.entry.updated",
@@ -718,6 +721,7 @@ export class ContentAdminService {
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
+      await createContentEntrySnapshot(transaction, actorId, siteId, contentEntryId);
       await transaction.auditEvent.create({
         data: contentEntryTransitionAuditData({
           actorId,

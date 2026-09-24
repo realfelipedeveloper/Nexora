@@ -75,6 +75,7 @@ model Site {
   locales            Locale[]
   contentTypes       ContentType[]
   contentEntries     ContentEntry[]
+  contentSnapshots   ContentEntrySnapshot[]
   contentAssignments ContentEntryAssignment[]
   editorialComments  ContentEntryComment[]
   editorialReviews   ContentEntryReview[]
@@ -235,6 +236,7 @@ model ContentEntry {
   assignments              ContentEntryAssignment[]
   editorialComments        ContentEntryComment[]
   editorialReviews         ContentEntryReview[]
+  snapshots                ContentEntrySnapshot[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
@@ -293,6 +295,27 @@ model ContentEntryReview {
   @@unique([contentEntryId, siteId, contentRevision, reviewerId, decision])
   @@index([contentEntryId, siteId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, reviewerId, createdAt])
+}
+
+model ContentEntrySnapshot {
+  id             String             @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  contentTypeId  String
+  actorId        String?
+  revision       Int
+  schemaVersion  Int
+  status         ContentEntryStatus
+  publishedAt    DateTime?
+  locales        Json
+  createdAt      DateTime           @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+
+  @@unique([contentEntryId, siteId, revision])
+  @@index([contentEntryId, siteId, revision(sort: Desc)])
+  @@index([siteId, createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model ContentLocale {

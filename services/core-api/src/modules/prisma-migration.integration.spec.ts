@@ -61,6 +61,7 @@ const migrationsRoot = path.join(workspaceRoot, "services", "core-api", "prisma"
 const contentSchemaVersioningMigration = "20260917180000_content_schema_versioning";
 const contentEditorialStateMigration = "20260922143000_content_entry_editorial_state";
 const editorialWorkflowModelMigration = "20260922223000_editorial_workflow_model";
+const contentEntrySnapshotsMigration = "20260924200000_content_entry_snapshots";
 
 async function applyMigrationsBeforeContentSchemaVersioning(connectionString: string) {
   const client = new Client({ connectionString });
@@ -117,6 +118,21 @@ async function applyEditorialWorkflowModelMigration(connectionString: string) {
   const client = new Client({ connectionString });
   const migration = await readFile(
     path.join(migrationsRoot, editorialWorkflowModelMigration, "migration.sql"),
+    "utf8",
+  );
+
+  await client.connect();
+  try {
+    await client.query(migration);
+  } finally {
+    await client.end();
+  }
+}
+
+async function applyContentEntrySnapshotsMigration(connectionString: string) {
+  const client = new Client({ connectionString });
+  const migration = await readFile(
+    path.join(migrationsRoot, contentEntrySnapshotsMigration, "migration.sql"),
     "utf8",
   );
 
@@ -206,6 +222,7 @@ describe("PostgreSQL migrations and integration", () => {
       expect.arrayContaining([
         "AuditEvent",
         "ContentEntry",
+        "ContentEntrySnapshot",
         "ContentLocale",
         "ContentType",
         "ContentTypeSchemaVersion",
@@ -663,6 +680,7 @@ describe("PostgreSQL migrations and integration", () => {
       await applyContentSchemaVersioningMigration(connectionString);
       await applyContentEditorialStateMigration(connectionString);
       await applyEditorialWorkflowModelMigration(connectionString);
+      await applyContentEntrySnapshotsMigration(connectionString);
 
       await expect(
         prisma.contentEntry.findUniqueOrThrow({
@@ -683,6 +701,37 @@ describe("PostgreSQL migrations and integration", () => {
         schemaVersion: 1,
         status: "DRAFT",
       });
+      const snapshot = await prisma.contentEntrySnapshot.findUniqueOrThrow({
+        where: {
+          contentEntryId_siteId_revision: {
+            contentEntryId: entry.id,
+            revision: 1,
+            siteId: site.id,
+          },
+        },
+      });
+      expect(snapshot).toMatchObject({
+        actorId: null,
+        contentEntryId: entry.id,
+        contentTypeId: contentType.id,
+        locales: [
+          {
+            data: legacyData,
+            localeCode: "pt-BR",
+            localeId: locale.id,
+            schemaVersion: 1,
+          },
+        ],
+        revision: 1,
+        schemaVersion: 1,
+        status: "DRAFT",
+      });
+      await expect(
+        prisma.contentEntrySnapshot.update({
+          data: { status: "PUBLISHED" },
+          where: { id: snapshot.id },
+        }),
+      ).rejects.toThrow("Content entry snapshots are immutable.");
     } finally {
       await prisma.$disconnect();
       await legacyPostgres.stop();
@@ -1560,6 +1609,57 @@ describe("PostgreSQL migrations and integration", () => {
         .expect(200)
         .expect("ETag", '"11"');
 
+      const snapshots = await prisma.contentEntrySnapshot.findMany({
+        orderBy: { revision: "asc" },
+        where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
+      });
+      expect(snapshots.map(({ revision, status }) => ({ revision, status }))).toEqual([
+        { revision: 1, status: "DRAFT" },
+        { revision: 2, status: "DRAFT" },
+        { revision: 3, status: "IN_REVIEW" },
+        { revision: 4, status: "PUBLISHED" },
+        { revision: 5, status: "DRAFT" },
+        { revision: 6, status: "IN_REVIEW" },
+        { revision: 7, status: "DRAFT" },
+        { revision: 8, status: "IN_REVIEW" },
+        { revision: 9, status: "PUBLISHED" },
+        { revision: 10, status: "ARCHIVED" },
+        { revision: 11, status: "DRAFT" },
+      ]);
+      expect(snapshots.map(({ actorId }) => actorId)).toEqual([
+        editor.id,
+        editor.id,
+        editor.id,
+        publisher.id,
+        publisher.id,
+        editor.id,
+        publisher.id,
+        editor.id,
+        publisher.id,
+        publisher.id,
+        publisher.id,
+      ]);
+      expect(snapshots[0]).toMatchObject({
+        contentTypeId: createdType.body.id,
+        locales: [
+          {
+            data: { title: submittedTitle },
+            localeCode: "pt-BR",
+            localeId: primaryLocale.id,
+            schemaVersion: 2,
+          },
+        ],
+        schemaVersion: 2,
+      });
+      expect(snapshots[1]?.locales).toEqual([
+        {
+          data: { summary: "Updated summary", title: submittedTitle },
+          localeCode: "pt-BR",
+          localeId: primaryLocale.id,
+          schemaVersion: 2,
+        },
+      ]);
+
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
@@ -1579,6 +1679,11 @@ describe("PostgreSQL migrations and integration", () => {
       ).resolves.toBe(0);
       await expect(
         prisma.contentEntryReview.count({
+          where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.contentEntrySnapshot.count({
           where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
         }),
       ).resolves.toBe(0);
@@ -1693,6 +1798,9 @@ describe("PostgreSQL migrations and integration", () => {
     const site = await prisma.site.create({
       data: { key: "workflow-concurrency", name: "Workflow Concurrency" },
     });
+    const locale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: site.id },
+    });
     const contentType = await prisma.contentType.create({
       data: {
         displayName: "Concurrent Article",
@@ -1721,7 +1829,14 @@ describe("PostgreSQL migrations and integration", () => {
     const service = new ContentAdminService(prisma, new ContentFieldValidator(), metrics);
     const createEntry = () =>
       prisma.contentEntry.create({
-        data: { contentTypeId: contentType.id, schemaVersion: 1, siteId: site.id },
+        data: {
+          contentLocales: {
+            create: { data: {}, localeId: locale.id, schemaVersion: 1 },
+          },
+          contentTypeId: contentType.id,
+          schemaVersion: 1,
+          siteId: site.id,
+        },
       });
 
     try {
@@ -1750,6 +1865,9 @@ describe("PostgreSQL migrations and integration", () => {
             entityId: identicalEntry.id,
           },
         }),
+      ).resolves.toBe(1);
+      await expect(
+        prisma.contentEntrySnapshot.count({ where: { contentEntryId: identicalEntry.id } }),
       ).resolves.toBe(1);
 
       const competingEntry = await createEntry();
@@ -1804,6 +1922,16 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 3,
         transition: finalEntry.status === "PUBLISHED" ? "PUBLISH" : "RETURN_TO_DRAFT",
       });
+      await expect(
+        prisma.contentEntrySnapshot.findMany({
+          orderBy: { revision: "asc" },
+          select: { revision: true, status: true },
+          where: { contentEntryId: competingEntry.id },
+        }),
+      ).resolves.toEqual([
+        { revision: 2, status: "IN_REVIEW" },
+        { revision: 3, status: finalEntry.status },
+      ]);
       expect(metrics.render()).toContain("nexora_content_precondition_failures_total 2");
     } finally {
       await prisma.$disconnect();

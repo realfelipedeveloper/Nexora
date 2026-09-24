@@ -158,6 +158,33 @@ export type ContentEntryTransitionAuditMetadata = z.infer<
 
 export const contentLocaleDataSchema = z.record(z.string(), z.unknown());
 
+export const contentEntrySnapshotLocaleSchema = z.strictObject({
+  data: contentLocaleDataSchema,
+  localeCode: z.string().trim().min(1).max(35),
+  localeId: z.string().uuid(),
+  schemaVersion: contentSchemaVersionSchema,
+});
+
+export const contentEntrySnapshotLocalesSchema = z
+  .array(contentEntrySnapshotLocaleSchema)
+  .min(1)
+  .max(20)
+  .superRefine((locales, context) => {
+    const seenLocaleIds = new Set<string>();
+    for (const [index, locale] of locales.entries()) {
+      if (seenLocaleIds.has(locale.localeId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Each snapshot locale may occur only once.",
+          path: [index, "localeId"],
+        });
+      }
+      seenLocaleIds.add(locale.localeId);
+    }
+  });
+
+export type ContentEntrySnapshotLocale = z.infer<typeof contentEntrySnapshotLocaleSchema>;
+
 function boundedLengthConfiguration(maximum: number) {
   return z
     .strictObject({
