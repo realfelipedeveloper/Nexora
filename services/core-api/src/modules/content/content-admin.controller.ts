@@ -35,6 +35,7 @@ import {
 } from "../identity/site-authorization.guard.js";
 import {
   ContentAdminService,
+  ContentEntryApprovalRequiredError,
   ContentEntryNotFoundError,
   ContentEntryStateConflictError,
   ContentEntryTransitionForbiddenError,
@@ -106,6 +107,9 @@ function mapContentError(error: unknown): never {
     throw new ConflictException(error.message);
   }
   if (error instanceof ContentEntryStateConflictError) {
+    throw new ConflictException(error.message);
+  }
+  if (error instanceof ContentEntryApprovalRequiredError) {
     throw new ConflictException(error.message);
   }
   if (error instanceof ContentEntryTransitionForbiddenError) {

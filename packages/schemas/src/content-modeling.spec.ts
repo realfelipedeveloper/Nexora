@@ -4,6 +4,7 @@ import {
   contentEntryAssignmentCreateSchema,
   contentEntryCommentCreateSchema,
   contentEntryCreateSchema,
+  contentEntryReviewCreateSchema,
   contentEntryStatusSchema,
   contentEntryStatusUpdateSchema,
   contentEntryWorkflowTransitions,
@@ -182,5 +183,29 @@ describe("content modeling contracts", () => {
     expect(contentEntryCommentCreateSchema.safeParse({ body: "x".repeat(4_001) }).success).toBe(
       false,
     );
+  });
+
+  it("requires a bounded reason only when editorial changes are requested", () => {
+    expect(contentEntryReviewCreateSchema.parse({ decision: "APPROVED" })).toEqual({
+      decision: "APPROVED",
+    });
+    expect(
+      contentEntryReviewCreateSchema.parse({
+        decision: "CHANGES_REQUESTED",
+        note: "  Clarify the publication date.  ",
+      }),
+    ).toEqual({
+      decision: "CHANGES_REQUESTED",
+      note: "Clarify the publication date.",
+    });
+    expect(
+      contentEntryReviewCreateSchema.safeParse({ decision: "CHANGES_REQUESTED" }).success,
+    ).toBe(false);
+    expect(
+      contentEntryReviewCreateSchema.safeParse({
+        decision: "APPROVED",
+        note: "x".repeat(4_001),
+      }).success,
+    ).toBe(false);
   });
 });
