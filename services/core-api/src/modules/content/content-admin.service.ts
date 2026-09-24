@@ -174,6 +174,14 @@ export class ContentEntryTransitionForbiddenError extends Error {
   }
 }
 
+export class ContentEntryApprovalRequiredError extends Error {
+  override readonly name = "ContentEntryApprovalRequiredError";
+
+  constructor() {
+    super("The current content revision requires editorial approval before publication.");
+  }
+}
+
 function isPrismaError(error: unknown, code: string) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
@@ -677,6 +685,20 @@ export class ContentAdminService {
       }
       if (!canSetContentWorkflowState(access, siteId, current.status, command.status)) {
         throw new ContentEntryTransitionForbiddenError();
+      }
+      if (workflowTransition.action === "PUBLISH") {
+        const approval = await transaction.contentEntryReview.findFirst({
+          select: { id: true },
+          where: {
+            contentEntryId,
+            contentRevision: current.revision,
+            decision: "APPROVED",
+            siteId,
+          },
+        });
+        if (!approval) {
+          throw new ContentEntryApprovalRequiredError();
+        }
       }
 
       const revision = expectedRevision + 1;

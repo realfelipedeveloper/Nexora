@@ -17,6 +17,7 @@ import {
 } from "./content-admin.controller.js";
 import {
   type ContentAdminService,
+  ContentEntryApprovalRequiredError,
   ContentEntryNotFoundError,
   ContentEntryStateConflictError,
   ContentEntryTransitionForbiddenError,
@@ -163,6 +164,7 @@ describe("content administration controllers", () => {
     [new ContentTypeConflictError(), ConflictException],
     [new ContentTypeInUseError(), ConflictException],
     [new ContentEntryStateConflictError(), ConflictException],
+    [new ContentEntryApprovalRequiredError(), ConflictException],
     [new ContentEntryTransitionForbiddenError(), ForbiddenException],
     [new ContentPreconditionFailedError(), PreconditionFailedException],
   ])("maps domain errors to bounded HTTP responses", async (failure, expected) => {

@@ -1213,6 +1213,67 @@ describe("PostgreSQL migrations and integration", () => {
         }),
       ).resolves.toBe(auditCountBeforeEditorPublish);
 
+      await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ status: "PUBLISHED" })
+        .expect(409);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"3"')
+        .send({ decision: "APPROVED" })
+        .expect(403);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ decision: "CHANGES_REQUESTED" })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"2"')
+        .send({ decision: "APPROVED" })
+        .expect(412);
+
+      const approval = await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ decision: "APPROVED" })
+        .expect(201);
+      expect(approval.headers.etag).toBe('"3"');
+      expect(approval.body).toMatchObject({
+        entry: { id: createdEntry.body.id, revision: 3, status: "IN_REVIEW" },
+        review: {
+          contentRevision: 3,
+          decision: "APPROVED",
+          reviewer: { id: publisher.id },
+        },
+      });
+      await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"3"')
+        .send({ decision: "APPROVED" })
+        .expect(409);
+
+      const approvedReviews = await request(app.getHttpServer())
+        .get(`${collaborationPath}/reviews?limit=1`)
+        .set("Cookie", viewerSession.cookie)
+        .expect(200);
+      expect(approvedReviews.body).toEqual({
+        items: [expect.objectContaining({ contentRevision: 3, decision: "APPROVED" })],
+      });
+
       const published = await request(app.getHttpServer())
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
@@ -1328,11 +1389,65 @@ describe("PostgreSQL migrations and integration", () => {
         .expect(200);
       expect(unpublishedCollection.body).toEqual({ items: [], nextCursor: null });
 
+      const resubmitted = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"5"')
+        .send({ status: "IN_REVIEW" })
+        .expect(200);
+      expect(resubmitted.headers.etag).toBe('"6"');
+
+      await request(app.getHttpServer())
+        .get(`/sites/${secondarySite.id}/content-entries/${createdEntry.body.id as string}/reviews`)
+        .set("Cookie", cookie)
+        .expect(404);
+      await expect(
+        prisma.contentEntryReview.create({
+          data: {
+            contentEntryId: createdEntry.body.id as string,
+            contentRevision: 6,
+            decision: "APPROVED",
+            reviewerId: publisher.id,
+            siteId: secondarySite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+
+      const changesNote = "Clarify the publication date before resubmitting.";
+      const changesRequested = await request(app.getHttpServer())
+        .post(`${collaborationPath}/reviews`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"6"')
+        .send({ decision: "CHANGES_REQUESTED", note: changesNote })
+        .expect(201);
+      expect(changesRequested.headers.etag).toBe('"7"');
+      expect(changesRequested.body).toMatchObject({
+        entry: { revision: 7, status: "DRAFT" },
+        review: {
+          contentRevision: 6,
+          decision: "CHANGES_REQUESTED",
+          note: changesNote,
+          reviewer: { id: publisher.id },
+        },
+      });
+
+      const reviewAuditEvents = await prisma.auditEvent.findMany({
+        select: { action: true, metadata: true },
+        where: {
+          action: "content.entry.review.created",
+          metadata: { path: ["siteId"], equals: primarySite.id },
+        },
+      });
+      expect(reviewAuditEvents).toHaveLength(2);
+      expect(JSON.stringify(reviewAuditEvents)).not.toContain(changesNote);
+
       await request(app.getHttpServer())
         .get(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .expect(200)
-        .expect("ETag", '"5"');
+        .expect("ETag", '"7"');
 
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
@@ -1344,10 +1459,15 @@ describe("PostgreSQL migrations and integration", () => {
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"5"')
+        .set("If-Match", '"7"')
         .expect(204);
       await expect(
         prisma.contentEntryComment.count({
+          where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.contentEntryReview.count({
           where: { contentEntryId: createdEntry.body.id as string, siteId: primarySite.id },
         }),
       ).resolves.toBe(0);
@@ -1384,6 +1504,8 @@ describe("PostgreSQL migrations and integration", () => {
         "content.entry.status.changed",
         "content.entry.status.changed",
         "content.entry.status.changed",
+        "content.entry.status.changed",
+        "content.entry.status.changed",
         "content.entry.deleted",
         "content.type.deleted",
       ]);
@@ -1391,7 +1513,7 @@ describe("PostgreSQL migrations and integration", () => {
         auditEvents
           .filter(({ action }) => action === "content.entry.status.changed")
           .map(({ actorId }) => actorId),
-      ).toEqual([editor.id, publisher.id, publisher.id]);
+      ).toEqual([editor.id, publisher.id, publisher.id, editor.id, publisher.id]);
       expect(JSON.stringify(auditEvents)).not.toContain(submittedTitle);
 
       const metrics = moduleRef.get(ContentMetrics).render();
@@ -1404,9 +1526,16 @@ describe("PostgreSQL migrations and integration", () => {
       expect(metrics).toContain(
         'nexora_content_collaboration_mutations_total{operation="comment_created"} 2',
       );
-      expect(metrics).toContain("nexora_content_precondition_failures_total 4");
+      expect(metrics).toContain('nexora_content_review_decisions_total{decision="APPROVED"} 1');
       expect(metrics).toContain(
-        'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 1',
+        'nexora_content_review_decisions_total{decision="CHANGES_REQUESTED"} 1',
+      );
+      expect(metrics).toContain("nexora_content_precondition_failures_total 5");
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 2',
+      );
+      expect(metrics).toContain(
+        'nexora_content_state_transitions_total{from="IN_REVIEW",to="DRAFT"} 1',
       );
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="IN_REVIEW",to="PUBLISHED"} 1',

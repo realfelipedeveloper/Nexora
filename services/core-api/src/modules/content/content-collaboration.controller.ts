@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Header,
   Headers,
@@ -14,8 +15,10 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  PreconditionFailedException,
   Query,
   Req,
+  Res,
   UnsupportedMediaTypeException,
   UseGuards,
 } from "@nestjs/common";
@@ -25,18 +28,26 @@ import { SessionAuthenticationGuard } from "../identity/session-authentication.g
 import {
   RequireSitePermissions,
   SiteAuthorizationGuard,
+  type SiteScopedRequest,
 } from "../identity/site-authorization.guard.js";
 import {
   ContentEntryNotFoundError,
+  ContentPreconditionFailedError,
   InvalidContentInputError,
   InvalidContentPageError,
 } from "./content-admin.service.js";
+import { parseContentPrecondition } from "./content-admin.controller.js";
 import {
   ContentCollaborationService,
   ContentEntryAssigneeUnavailableError,
   ContentEntryAssignmentConflictError,
   ContentEntryAssignmentNotFoundError,
+  ContentEntryReviewConflictError,
+  ContentEntryReviewForbiddenError,
+  ContentEntryReviewStateConflictError,
 } from "./content-collaboration.service.js";
+
+type HeaderResponse = { setHeader: (name: string, value: string) => void };
 
 function requireJson(contentType: string | undefined) {
   if (contentType?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
@@ -51,6 +62,13 @@ function actorId(request: AuthenticatedRequest) {
   return request.identity.user.id;
 }
 
+function siteAccess(request: SiteScopedRequest) {
+  if (!request.siteAccess) {
+    throw new ForbiddenException("Site access denied.");
+  }
+  return request.siteAccess;
+}
+
 function mapCollaborationError(error: unknown): never {
   if (error instanceof InvalidContentInputError || error instanceof InvalidContentPageError) {
     throw new BadRequestException(error.message);
@@ -62,8 +80,18 @@ function mapCollaborationError(error: unknown): never {
   ) {
     throw new NotFoundException(error.message);
   }
-  if (error instanceof ContentEntryAssignmentConflictError) {
+  if (
+    error instanceof ContentEntryAssignmentConflictError ||
+    error instanceof ContentEntryReviewConflictError ||
+    error instanceof ContentEntryReviewStateConflictError
+  ) {
     throw new ConflictException(error.message);
+  }
+  if (error instanceof ContentEntryReviewForbiddenError) {
+    throw new ForbiddenException(error.message);
+  }
+  if (error instanceof ContentPreconditionFailedError) {
+    throw new PreconditionFailedException(error.message);
   }
   throw error;
 }
@@ -169,6 +197,53 @@ export class ContentCollaborationController {
     requireJson(contentType);
     try {
       return await this.collaboration.createComment(actorId(request), siteId, contentEntryId, body);
+    } catch (error) {
+      mapCollaborationError(error);
+    }
+  }
+
+  @Get("reviews")
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.read")
+  async listReviews(
+    @Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string,
+    @Param("contentEntryId", new ParseUUIDPipe({ version: "4" })) contentEntryId: string,
+    @Query("limit") limit: string | undefined,
+    @Query("cursor") cursor: string | undefined,
+  ) {
+    try {
+      return await this.collaboration.listReviews(siteId, contentEntryId, { cursor, limit });
+    } catch (error) {
+      mapCollaborationError(error);
+    }
+  }
+
+  @Post("reviews")
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.publish")
+  @UseGuards(SessionCsrfGuard)
+  async createReview(
+    @Req() request: SiteScopedRequest,
+    @Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string,
+    @Param("contentEntryId", new ParseUUIDPipe({ version: "4" })) contentEntryId: string,
+    @Headers("content-type") contentType: string | undefined,
+    @Headers("if-match") ifMatch: string | undefined,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) response: HeaderResponse,
+  ) {
+    requireJson(contentType);
+    const expectedRevision = parseContentPrecondition(ifMatch);
+    try {
+      const result = await this.collaboration.createReview(
+        actorId(request),
+        siteId,
+        siteAccess(request),
+        contentEntryId,
+        expectedRevision,
+        body,
+      );
+      response.setHeader("ETag", `"${result.entry.revision}"`);
+      return result;
     } catch (error) {
       mapCollaborationError(error);
     }

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import type { ContentEntryStatus } from "@nexora/schemas";
+import type { ContentEntryReviewDecision, ContentEntryStatus } from "@nexora/schemas";
 
 type PublicContentOperation = "detail" | "list";
 type PublicContentOutcome = "hit" | "miss";
@@ -10,6 +10,7 @@ export class ContentMetrics {
   private preconditionFailures = 0;
   private readonly collaborationMutations = new Map<CollaborationMutation, number>();
   private readonly publicReads = new Map<string, number>();
+  private readonly reviewDecisions = new Map<ContentEntryReviewDecision, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -26,6 +27,10 @@ export class ContentMetrics {
   recordPublicRead(operation: PublicContentOperation, outcome: PublicContentOutcome) {
     const key = `${operation}:${outcome}`;
     this.publicReads.set(key, (this.publicReads.get(key) ?? 0) + 1);
+  }
+
+  recordReviewDecision(decision: ContentEntryReviewDecision) {
+    this.reviewDecisions.set(decision, (this.reviewDecisions.get(decision) ?? 0) + 1);
   }
 
   recordStateTransition(from: ContentEntryStatus, to: ContentEntryStatus) {
@@ -52,6 +57,10 @@ export class ContentMetrics {
       lines.push(
         `nexora_public_content_reads_total{operation="${operation}",outcome="${outcome}"} ${count}`,
       );
+    }
+    lines.push("# TYPE nexora_content_review_decisions_total counter");
+    for (const [decision, count] of [...this.reviewDecisions.entries()].sort()) {
+      lines.push(`nexora_content_review_decisions_total{decision="${decision}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {
