@@ -301,6 +301,38 @@ export class ContentAdminService {
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
   ) {}
 
+  async getEditorialContext(siteId: string) {
+    const [locales, members] = await Promise.all([
+      this.prisma.locale.findMany({
+        orderBy: [{ isDefault: "desc" }, { code: "asc" }],
+        select: { code: true, id: true, isDefault: true },
+        take: 100,
+        where: { siteId },
+      }),
+      this.prisma.user.findMany({
+        orderBy: [{ displayName: "asc" }, { id: "asc" }],
+        select: { displayName: true, id: true },
+        take: 100,
+        where: {
+          OR: [
+            { isSystemAdmin: true },
+            {
+              siteRoleAssignments: {
+                some: {
+                  role: { permissions: { some: { permissionKey: "content.write" } } },
+                  siteId,
+                },
+              },
+            },
+          ],
+          status: "ACTIVE",
+        },
+      }),
+    ]);
+
+    return { locales, members };
+  }
+
   async listContentTypes(siteId: string, input: ContentPageInput) {
     const page = parsePage(input);
     if (page.cursor) {

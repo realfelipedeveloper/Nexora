@@ -121,6 +121,19 @@ function mapContentError(error: unknown): never {
   throw error;
 }
 
+@Controller("sites/:siteId/editorial-context")
+@UseGuards(SessionAuthenticationGuard, SiteAuthorizationGuard)
+export class EditorialContextController {
+  constructor(@Inject(ContentAdminService) private readonly content: ContentAdminService) {}
+
+  @Get()
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.read")
+  get(@Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string) {
+    return this.content.getEditorialContext(siteId);
+  }
+}
+
 @Controller("sites/:siteId/content-types")
 @UseGuards(SessionAuthenticationGuard, SiteAuthorizationGuard)
 export class ContentTypesController {

@@ -165,8 +165,14 @@ test.describe("frontend foundation", () => {
     await expect(page.getByRole("region", { name: "Initial field types" })).toBeVisible();
     await expect(page.locator(".field-tile")).toHaveCount(18);
     const overview = page.getByRole("button", { name: "Overview" });
+    const contentTypes = page.getByRole("button", { name: "Content types" });
+    const entries = page.getByRole("button", { name: "Entries" });
     const settings = page.getByRole("button", { name: "Settings" });
     await overview.focus();
+    await page.keyboard.press("Tab");
+    await expect(contentTypes).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(entries).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(settings).toBeFocused();
 
@@ -340,5 +346,157 @@ test.describe("frontend foundation", () => {
     await page.getByRole("button", { name: "Reload" }).click();
     await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
     expect(identityReads).toBe(2);
+  });
+
+  test("cms edits content models and advances an entry with scoped concurrency", async ({
+    page,
+  }) => {
+    let typeWriteHeaders: Record<string, string> | undefined;
+    let statusWriteHeaders: Record<string, string> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: ["content.read", "content.write", "content.publish"],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({
+        json: {
+          locales: [{ code: "en", id: "locale-1", isDefault: true }],
+          members: [{ displayName: "Nexora Admin", id: "user-1" }],
+        },
+        status: 200,
+      });
+    });
+    const typeSummary = {
+      displayName: "Article",
+      id: "type-1",
+      key: "article",
+      schemaVersion: 2,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const typeDetail = {
+      ...typeSummary,
+      fields: [
+        {
+          config: {},
+          fieldType: "text",
+          id: "field-1",
+          key: "title",
+          label: "Title",
+          position: 0,
+          required: true,
+        },
+      ],
+    };
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-types(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname.endsWith("/type-1")) {
+          if (route.request().method() === "PUT") {
+            typeWriteHeaders = route.request().headers();
+            await route.fulfill({
+              headers: { ETag: '"3"' },
+              json: { ...typeDetail, displayName: "News article", schemaVersion: 3 },
+              status: 200,
+            });
+            return;
+          }
+          await route.fulfill({ headers: { ETag: '"2"' }, json: typeDetail, status: 200 });
+          return;
+        }
+        await route.fulfill({ json: { items: [typeSummary] }, status: 200 });
+      },
+    );
+    const entryDetail = {
+      contentLocales: [
+        {
+          data: { title: "Release" },
+          locale: { code: "en" },
+          localeId: "locale-1",
+          revision: 1,
+          schemaVersion: 2,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      contentType: { displayName: "Article", id: "type-1", key: "article" },
+      contentTypeId: "type-1",
+      id: "entry-1",
+      publishedAt: null,
+      revision: 1,
+      schemaVersion: 2,
+      status: "DRAFT",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-entries(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname.endsWith("/status")) {
+          statusWriteHeaders = route.request().headers();
+          await route.fulfill({
+            headers: { ETag: '"2"' },
+            json: { ...entryDetail, revision: 2, status: "IN_REVIEW" },
+            status: 200,
+          });
+          return;
+        }
+        if (pathname.endsWith("/entry-1")) {
+          await route.fulfill({ headers: { ETag: '"1"' }, json: entryDetail, status: 200 });
+          return;
+        }
+        if (/\/(assignments|comments|reviews|transitions)$/u.test(pathname)) {
+          await route.fulfill({ json: { items: [] }, status: 200 });
+          return;
+        }
+        await route.fulfill({ json: { items: [entryDetail] }, status: 200 });
+      },
+    );
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Content types" }).click();
+    await page.getByRole("button", { name: /Article/ }).click();
+    await page.getByLabel("Display name").fill("News article");
+    await page.getByRole("button", { name: "Save type" }).click();
+    await expect(page.getByText("Content type updated.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Entries" }).click();
+    await page.getByRole("button", { name: /Article/ }).click();
+    await page.getByRole("tab", { name: "Workflow" }).click();
+    await page.getByRole("button", { name: "Submit for review" }).click();
+    await expect(page.getByText("Submitted for review.")).toBeVisible();
+
+    expect(typeWriteHeaders?.["if-match"]).toBe('"2"');
+    expect(typeWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(statusWriteHeaders?.["if-match"]).toBe('"1"');
+    expect(statusWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    await page.setViewportSize({ height: 844, width: 390 });
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 });
