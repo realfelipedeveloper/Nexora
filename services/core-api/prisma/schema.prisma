@@ -80,6 +80,7 @@ model Site {
   editorialComments  ContentEntryComment[]
   editorialReviews   ContentEntryReview[]
   roleAssignments    SiteRoleAssignment[]
+  sections           Section[]
   settings           SiteSetting[]
 
   @@index([status])
@@ -166,6 +167,24 @@ model Locale {
 
   @@unique([siteId, code])
   @@unique([id, siteId])
+}
+
+model Section {
+  id        String   @id @default(uuid())
+  siteId    String
+  parentId  String?
+  key       String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  parent   Section?  @relation("SectionHierarchy", fields: [parentId, siteId], references: [id, siteId], onDelete: Restrict)
+  children Section[] @relation("SectionHierarchy")
+
+  @@unique([id, siteId])
+  @@unique([siteId, key])
+  @@index([siteId, parentId, createdAt, id])
 }
 
 model ContentType {
