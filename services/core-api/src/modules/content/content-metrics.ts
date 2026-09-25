@@ -5,6 +5,11 @@ type PublicContentOperation = "detail" | "list";
 type PublicContentOutcome = "hit" | "miss";
 type CollaborationMutation = "assignment_created" | "assignment_deleted" | "comment_created";
 type ContentRevisionComparisonOutcome = "invalid" | "not_found" | "success";
+type ContentRevisionRestorationOutcome =
+  | "invalid"
+  | "not_found"
+  | "precondition_failed"
+  | "success";
 
 @Injectable()
 export class ContentMetrics {
@@ -12,6 +17,7 @@ export class ContentMetrics {
   private readonly collaborationMutations = new Map<CollaborationMutation, number>();
   private readonly publicReads = new Map<string, number>();
   private readonly revisionComparisons = new Map<ContentRevisionComparisonOutcome, number>();
+  private readonly revisionRestorations = new Map<ContentRevisionRestorationOutcome, number>();
   private readonly reviewDecisions = new Map<ContentEntryReviewDecision, number>();
   private readonly stateTransitions = new Map<string, number>();
 
@@ -37,6 +43,10 @@ export class ContentMetrics {
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
     this.revisionComparisons.set(outcome, (this.revisionComparisons.get(outcome) ?? 0) + 1);
+  }
+
+  recordRevisionRestoration(outcome: ContentRevisionRestorationOutcome) {
+    this.revisionRestorations.set(outcome, (this.revisionRestorations.get(outcome) ?? 0) + 1);
   }
 
   recordStateTransition(from: ContentEntryStatus, to: ContentEntryStatus) {
@@ -67,6 +77,10 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_content_revision_comparisons_total counter");
     for (const [outcome, count] of [...this.revisionComparisons.entries()].sort()) {
       lines.push(`nexora_content_revision_comparisons_total{outcome="${outcome}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_content_revision_restorations_total counter");
+    for (const [outcome, count] of [...this.revisionRestorations.entries()].sort()) {
+      lines.push(`nexora_content_revision_restorations_total{outcome="${outcome}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_review_decisions_total counter");
     for (const [decision, count] of [...this.reviewDecisions.entries()].sort()) {

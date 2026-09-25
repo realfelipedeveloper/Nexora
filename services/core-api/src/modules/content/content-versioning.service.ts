@@ -1,7 +1,12 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { contentEntrySnapshotLocalesSchema, type ContentEntryStatus } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import {
+  ContentEntryNotFoundError,
+  ContentPreconditionFailedError,
+} from "./content-admin.service.js";
+import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { generateContentEntryFieldDiff } from "./content-entry-diff.js";
 import { ContentMetrics } from "./content-metrics.js";
 
@@ -24,11 +29,44 @@ const revisionSnapshotSelection = {
   status: true,
 } as const;
 
+const restoredContentEntrySelection = {
+  contentLocales: {
+    orderBy: { localeId: "asc" },
+    select: {
+      createdAt: true,
+      data: true,
+      id: true,
+      locale: { select: { code: true } },
+      localeId: true,
+      revision: true,
+      schemaVersion: true,
+      updatedAt: true,
+    },
+  },
+  contentType: { select: { displayName: true, id: true, key: true } },
+  contentTypeId: true,
+  createdAt: true,
+  id: true,
+  publishedAt: true,
+  revision: true,
+  schemaVersion: true,
+  status: true,
+  updatedAt: true,
+} as const;
+
 export class InvalidContentRevisionComparisonError extends Error {
   override readonly name = "InvalidContentRevisionComparisonError";
 
   constructor() {
     super("Content revision comparison parameters are invalid.");
+  }
+}
+
+export class InvalidContentRevisionError extends Error {
+  override readonly name = "InvalidContentRevisionError";
+
+  constructor() {
+    super("Content revision is invalid.");
   }
 }
 
@@ -119,5 +157,101 @@ export class ContentVersioningService {
     };
     this.metrics.recordRevisionComparison("success");
     return result;
+  }
+
+  async restoreRevision(
+    actorId: string,
+    siteId: string,
+    contentEntryId: string,
+    revisionInput: string,
+    expectedRevision: number,
+  ) {
+    const restoredFromRevision = parseRevision(revisionInput);
+    if (restoredFromRevision === undefined) {
+      this.metrics.recordRevisionRestoration("invalid");
+      throw new InvalidContentRevisionError();
+    }
+
+    const restored = await this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.contentEntry.findUnique({
+        select: { id: true, revision: true },
+        where: { id_siteId: { id: contentEntryId, siteId } },
+      });
+      if (!current) {
+        this.metrics.recordRevisionRestoration("not_found");
+        throw new ContentEntryNotFoundError();
+      }
+      if (current.revision !== expectedRevision) {
+        this.preconditionFailed();
+      }
+
+      const snapshot = await transaction.contentEntrySnapshot.findUnique({
+        select: revisionSnapshotSelection,
+        where: {
+          contentEntryId_siteId_revision: {
+            contentEntryId,
+            revision: restoredFromRevision,
+            siteId,
+          },
+        },
+      });
+      if (!snapshot) {
+        this.metrics.recordRevisionRestoration("not_found");
+        throw new ContentEntryRevisionNotFoundError();
+      }
+      const locales = contentEntrySnapshotLocalesSchema.parse(snapshot.locales);
+      const revision = expectedRevision + 1;
+      const claimed = await transaction.contentEntry.updateMany({
+        data: {
+          publishedAt: null,
+          revision,
+          schemaVersion: snapshot.schemaVersion,
+          status: "DRAFT",
+        },
+        where: { id: contentEntryId, revision: expectedRevision, siteId },
+      });
+      if (claimed.count !== 1) {
+        this.preconditionFailed();
+      }
+
+      await transaction.contentLocale.deleteMany({ where: { contentEntryId, siteId } });
+      await transaction.contentLocale.createMany({
+        data: locales.map((locale) => ({
+          contentEntryId,
+          data: locale.data as Prisma.InputJsonValue,
+          localeId: locale.localeId,
+          schemaVersion: locale.schemaVersion,
+          siteId,
+        })),
+      });
+      const entry = await transaction.contentEntry.findUniqueOrThrow({
+        select: restoredContentEntrySelection,
+        where: { id_siteId: { id: contentEntryId, siteId } },
+      });
+      await createContentEntrySnapshot(transaction, actorId, siteId, contentEntryId);
+      await transaction.auditEvent.create({
+        data: {
+          action: "content.entry.revision.restored",
+          actorId,
+          entity: "ContentEntry",
+          entityId: contentEntryId,
+          metadata: {
+            previousRevision: expectedRevision,
+            restoredFromRevision,
+            revision,
+            siteId,
+          },
+        },
+      });
+      return entry;
+    });
+    this.metrics.recordRevisionRestoration("success");
+    return restored;
+  }
+
+  private preconditionFailed(): never {
+    this.metrics.recordPreconditionFailure();
+    this.metrics.recordRevisionRestoration("precondition_failed");
+    throw new ContentPreconditionFailedError();
   }
 }
