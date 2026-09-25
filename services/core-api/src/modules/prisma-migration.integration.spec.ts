@@ -25,6 +25,10 @@ import { ContentCollaborationController } from "./content/content-collaboration.
 import { ContentCollaborationService } from "./content/content-collaboration.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
+import {
+  NavigationConflictError,
+  NavigationRoutingService,
+} from "./content/navigation-routing.service.js";
 import { PublicContentController } from "./content/content-public.controller.js";
 import { PublicContentService } from "./content/content-public.service.js";
 import { ContentVersioningController } from "./content/content-versioning.controller.js";
@@ -3343,6 +3347,151 @@ describe("PostgreSQL migrations and integration", () => {
       expect(JSON.stringify(auditEvents)).not.toContain(sensitiveValue);
     } finally {
       await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("enforces isolated navigation, slug history, collisions, and hierarchy loops", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const actor = await prisma.user.create({
+      data: {
+        displayName: "Navigation Editor",
+        email: "navigation.editor@example.com",
+        normalizedEmail: "navigation.editor@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const firstSite = await prisma.site.create({
+      data: { key: "navigation-primary", name: "Navigation Primary" },
+    });
+    const secondSite = await prisma.site.create({
+      data: { key: "navigation-secondary", name: "Navigation Secondary" },
+    });
+    const firstLocale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: firstSite.id },
+    });
+    const secondLocale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: secondSite.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Navigation Page",
+        key: "navigation-page",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Navigation Page",
+              fields: [],
+              key: "navigation-page",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: firstSite.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: { create: { data: { title: "News" }, localeId: firstLocale.id } },
+        contentTypeId: contentType.id,
+        publishedAt: new Date(),
+        siteId: firstSite.id,
+        status: "PUBLISHED",
+      },
+    });
+    const metrics = new ContentMetrics();
+    const service = new NavigationRoutingService(prisma, metrics);
+
+    try {
+      const route = await service.createRoute(actor.id, firstSite.id, {
+        contentEntryId: entry.id,
+        localeId: firstLocale.id,
+        path: "/noticias",
+      });
+      const updated = await service.updateRoute(actor.id, firstSite.id, route.id, {
+        contentEntryId: entry.id,
+        path: "/novidades",
+      });
+      expect(updated).toMatchObject({
+        aliases: [{ path: { path: "/noticias" } }],
+        path: { path: "/novidades" },
+      });
+      await expect(
+        service.resolvePublicRoute(firstSite.key, firstLocale.code, "/noticias"),
+      ).resolves.toEqual({ kind: "redirect", location: "/novidades", statusCode: 301 });
+      await expect(
+        service.resolvePublicRoute(firstSite.key, firstLocale.code, "/novidades"),
+      ).resolves.toMatchObject({ contentEntryId: entry.id, kind: "route" });
+
+      await expect(
+        service.createRedirect(actor.id, firstSite.id, {
+          localeId: firstLocale.id,
+          sourcePath: "/novidades",
+          targetPath: "/destino",
+        }),
+      ).rejects.toBeInstanceOf(NavigationConflictError);
+      await service.createRedirect(actor.id, firstSite.id, {
+        localeId: firstLocale.id,
+        sourcePath: "/legado-a",
+        targetPath: "/legado-b",
+      });
+      await expect(
+        service.createRedirect(actor.id, firstSite.id, {
+          localeId: firstLocale.id,
+          sourcePath: "/legado-b",
+          targetPath: "/legado-a",
+        }),
+      ).rejects.toBeInstanceOf(NavigationConflictError);
+
+      const menu = await service.createMenu(actor.id, firstSite.id, {
+        key: "main",
+        localeId: firstLocale.id,
+        name: "Principal",
+      });
+      const parent = await service.createMenuItem(actor.id, firstSite.id, menu.id, {
+        label: "Novidades",
+        linkType: "INTERNAL",
+        routeId: route.id,
+      });
+      const child = await service.createMenuItem(actor.id, firstSite.id, menu.id, {
+        externalUrl: "https://example.com",
+        label: "Externo",
+        linkType: "EXTERNAL",
+        parentId: parent.id,
+      });
+      await expect(
+        prisma.menuItem.update({ data: { parentId: child.id }, where: { id: parent.id } }),
+      ).rejects.toThrow(/menu item hierarchy cycle/iu);
+      await expect(
+        prisma.menu.create({
+          data: {
+            key: "cross-site",
+            localeId: secondLocale.id,
+            name: "Invalid",
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toThrow();
+
+      await expect(
+        service.getPublicMenu(firstSite.key, firstLocale.code, menu.key),
+      ).resolves.toMatchObject({
+        items: [{ children: [{ externalUrl: "https://example.com" }], path: "/novidades" }],
+      });
+      await service.deleteMenu(actor.id, firstSite.id, menu.id);
+      await expect(
+        prisma.menuItem.count({ where: { menuId: menu.id, siteId: firstSite.id } }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.auditEvent.count({
+          where: { actorId: actor.id, entity: { in: ["Menu", "MenuItem", "Redirect", "Route"] } },
+        }),
+      ).resolves.toBe(7);
+      expect(metrics.render()).toContain(
+        'nexora_navigation_mutations_total{operation="route_updated"} 1',
+      );
+    } finally {
       await prisma.$disconnect();
     }
   }, 120_000);
