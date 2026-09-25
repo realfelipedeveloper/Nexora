@@ -19,7 +19,7 @@ import {
 } from "./content-versioning.service.js";
 
 function fixture() {
-  const service = { compareRevisions: vi.fn(), restoreRevision: vi.fn() };
+  const service = { compareRevisions: vi.fn(), listRevisions: vi.fn(), restoreRevision: vi.fn() };
   return {
     controller: new ContentVersioningController(service as unknown as ContentVersioningService),
     service,
@@ -27,6 +27,15 @@ function fixture() {
 }
 
 describe("content versioning controller", () => {
+  it("lists site-scoped revision metadata", async () => {
+    const { controller, service } = fixture();
+    const revisions = [{ revision: 2 }, { revision: 1 }];
+    service.listRevisions.mockResolvedValue(revisions);
+
+    await expect(controller.list("site-1", "entry-1")).resolves.toBe(revisions);
+    expect(service.listRevisions).toHaveBeenCalledWith("site-1", "entry-1");
+  });
+
   it("delegates a site-scoped revision comparison", async () => {
     const { controller, service } = fixture();
     const comparison = { contentEntryId: "entry-1", fieldChanges: [] };
