@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   open-develop-pr:
@@ -23,9 +22,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Gerar token do aplicativo de automacao
+        id: automation-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.NEXORA_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.NEXORA_PROMOTION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Nexora
+
       - name: Abrir PR da branch de trabalho para develop
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.automation-token.outputs.token }}
           HEAD_BRANCH: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
