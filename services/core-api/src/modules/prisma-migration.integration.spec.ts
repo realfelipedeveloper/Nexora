@@ -1719,6 +1719,71 @@ describe("PostgreSQL migrations and integration", () => {
         },
       ]);
 
+      const restorationPath = `/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/revisions`;
+      await request(app.getHttpServer())
+        .post(`${restorationPath}/1/restore`)
+        .set("Cookie", viewerSession.cookie)
+        .set("x-csrf-token", viewerSession.csrfToken)
+        .set("If-Match", '"11"')
+        .expect(403);
+      await request(app.getHttpServer())
+        .post(`${restorationPath}/0/restore`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"11"')
+        .expect(400);
+      await request(app.getHttpServer())
+        .post(`${restorationPath}/999/restore`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"11"')
+        .expect(404);
+      await request(app.getHttpServer())
+        .post(`${restorationPath}/1/restore`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"10"')
+        .expect(412);
+
+      const restored = await request(app.getHttpServer())
+        .post(`${restorationPath}/1/restore`)
+        .set("Cookie", cookie)
+        .set("x-csrf-token", csrfToken)
+        .set("If-Match", '"11"')
+        .expect(201)
+        .expect("Cache-Control", "no-store")
+        .expect("ETag", '"12"');
+      expect(restored.body).toMatchObject({
+        contentLocales: [
+          {
+            data: { title: submittedTitle },
+            localeId: primaryLocale.id,
+            schemaVersion: 2,
+          },
+        ],
+        publishedAt: null,
+        revision: 12,
+        schemaVersion: 2,
+        status: "DRAFT",
+      });
+      expect(JSON.stringify(restored.body)).not.toContain("Updated summary");
+      await expect(
+        prisma.contentEntrySnapshot.findUnique({
+          where: {
+            contentEntryId_siteId_revision: {
+              contentEntryId: createdEntry.body.id as string,
+              revision: 12,
+              siteId: primarySite.id,
+            },
+          },
+        }),
+      ).resolves.toMatchObject({
+        actorId: editor.id,
+        revision: 12,
+        schemaVersion: 2,
+        status: "DRAFT",
+      });
+
       await request(app.getHttpServer())
         .delete(`/sites/${primarySite.id}/content-types/${createdType.body.id as string}`)
         .set("Cookie", cookie)
@@ -1729,7 +1794,7 @@ describe("PostgreSQL migrations and integration", () => {
         .delete(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}`)
         .set("Cookie", cookie)
         .set("x-csrf-token", csrfToken)
-        .set("If-Match", '"11"')
+        .set("If-Match", '"12"')
         .expect(204);
       await expect(
         prisma.contentEntryComment.count({
@@ -1763,6 +1828,7 @@ describe("PostgreSQL migrations and integration", () => {
               "content.type.updated",
               "content.entry.created",
               "content.entry.updated",
+              "content.entry.revision.restored",
               "content.entry.status.changed",
               "content.entry.deleted",
               "content.type.deleted",
@@ -1785,6 +1851,7 @@ describe("PostgreSQL migrations and integration", () => {
         "content.entry.status.changed",
         "content.entry.status.changed",
         "content.entry.status.changed",
+        "content.entry.revision.restored",
         "content.entry.deleted",
         "content.type.deleted",
       ]);
@@ -1818,11 +1885,19 @@ describe("PostgreSQL migrations and integration", () => {
       expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="invalid"} 2');
       expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="not_found"} 2');
       expect(metrics).toContain('nexora_content_revision_comparisons_total{outcome="success"} 2');
+      expect(metrics).toContain('nexora_content_revision_restorations_total{outcome="invalid"} 1');
+      expect(metrics).toContain(
+        'nexora_content_revision_restorations_total{outcome="not_found"} 1',
+      );
+      expect(metrics).toContain(
+        'nexora_content_revision_restorations_total{outcome="precondition_failed"} 1',
+      );
+      expect(metrics).toContain('nexora_content_revision_restorations_total{outcome="success"} 1');
       expect(metrics).toContain('nexora_content_review_decisions_total{decision="APPROVED"} 2');
       expect(metrics).toContain(
         'nexora_content_review_decisions_total{decision="CHANGES_REQUESTED"} 1',
       );
-      expect(metrics).toContain("nexora_content_precondition_failures_total 5");
+      expect(metrics).toContain("nexora_content_precondition_failures_total 6");
       expect(metrics).toContain(
         'nexora_content_state_transitions_total{from="DRAFT",to="IN_REVIEW"} 3',
       );
