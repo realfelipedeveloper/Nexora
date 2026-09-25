@@ -234,6 +234,7 @@ describe("PostgreSQL migrations and integration", () => {
         "Permission",
         "Role",
         "RolePermission",
+        "Section",
         "Session",
         "Site",
         "SiteRoleAssignment",
@@ -417,6 +418,108 @@ describe("PostgreSQL migrations and integration", () => {
       await expect(
         prisma.globalSetting.findUnique({ where: { key: "platform.branding" } }),
       ).resolves.toMatchObject({ version: 1 });
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("models site-scoped section hierarchies with database invariants", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const [firstSite, secondSite] = await Promise.all([
+        prisma.site.create({ data: { key: "section-first", name: "Section First" } }),
+        prisma.site.create({ data: { key: "section-second", name: "Section Second" } }),
+      ]);
+      const root = await prisma.section.create({
+        data: { key: "news", name: "News", siteId: firstSite.id },
+      });
+      const child = await prisma.section.create({
+        data: {
+          key: "local-news",
+          name: "Local News",
+          parentId: root.id,
+          siteId: firstSite.id,
+        },
+      });
+      const grandchild = await prisma.section.create({
+        data: {
+          key: "city-hall",
+          name: "City Hall",
+          parentId: child.id,
+          siteId: firstSite.id,
+        },
+      });
+
+      await expect(
+        prisma.section.findUniqueOrThrow({
+          include: {
+            children: {
+              include: { children: true },
+            },
+          },
+          where: { id_siteId: { id: root.id, siteId: firstSite.id } },
+        }),
+      ).resolves.toMatchObject({
+        children: [
+          {
+            children: [{ id: grandchild.id, parentId: child.id }],
+            id: child.id,
+            parentId: root.id,
+          },
+        ],
+        id: root.id,
+        parentId: null,
+      });
+
+      await expect(
+        prisma.section.create({
+          data: { key: root.key, name: "Duplicate", siteId: firstSite.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+      await expect(
+        prisma.section.create({
+          data: { key: root.key, name: "News", siteId: secondSite.id },
+        }),
+      ).resolves.toMatchObject({ key: root.key, siteId: secondSite.id });
+      await expect(
+        prisma.section.create({
+          data: {
+            key: "cross-site-child",
+            name: "Cross-site Child",
+            parentId: root.id,
+            siteId: secondSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+      await expect(
+        prisma.section.create({
+          data: {
+            id: "00000000-0000-4000-8000-000000000701",
+            key: "self-parent",
+            name: "Self Parent",
+            parentId: "00000000-0000-4000-8000-000000000701",
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.section.create({
+          data: { key: "Invalid Section Key", name: "Invalid", siteId: firstSite.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.section.create({
+          data: { key: "blank-name", name: "   ", siteId: firstSite.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(prisma.section.delete({ where: { id: root.id } })).rejects.toMatchObject({
+        code: "P2003",
+      });
+
+      await prisma.site.delete({ where: { id: firstSite.id } });
+      await expect(prisma.section.count({ where: { siteId: firstSite.id } })).resolves.toBe(0);
+      await expect(prisma.section.count({ where: { siteId: secondSite.id } })).resolves.toBe(1);
     } finally {
       await prisma.$disconnect();
     }
