@@ -1922,6 +1922,172 @@ describe("PostgreSQL migrations and integration", () => {
     }
   }, 120_000);
 
+  it("preserves historical schema versions when restoring a revision", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const actor = await prisma.user.create({
+      data: {
+        displayName: "Schema Version Editor",
+        email: "schema.version.editor@example.com",
+        normalizedEmail: "schema.version.editor@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const site = await prisma.site.create({
+      data: { key: "versioning-schema-preservation", name: "Schema Preservation" },
+    });
+    const locale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: site.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Versioned Article",
+        key: "versioned-article",
+        schemaVersion: 2,
+        schemaVersions: {
+          create: [
+            {
+              definition: {
+                displayName: "Versioned Article",
+                fields: [{ fieldType: "text", key: "title", required: true }],
+                key: "versioned-article",
+                version: 1,
+              },
+              version: 1,
+            },
+            {
+              definition: {
+                displayName: "Versioned Article",
+                fields: [
+                  { fieldType: "text", key: "title", required: true },
+                  { fieldType: "text", key: "summary", required: true },
+                ],
+                key: "versioned-article",
+                version: 2,
+              },
+              version: 2,
+            },
+          ],
+        },
+        siteId: site.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: {
+          create: {
+            data: { summary: "Current summary", title: "Current title" },
+            localeId: locale.id,
+            schemaVersion: 2,
+          },
+        },
+        contentTypeId: contentType.id,
+        publishedAt: new Date(),
+        revision: 2,
+        schemaVersion: 2,
+        siteId: site.id,
+        status: "PUBLISHED",
+      },
+    });
+    await prisma.contentEntrySnapshot.createMany({
+      data: [
+        {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { title: "Historical title" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 1,
+            },
+          ],
+          revision: 1,
+          schemaVersion: 1,
+          siteId: site.id,
+          status: "DRAFT",
+        },
+        {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { summary: "Current summary", title: "Current title" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 2,
+            },
+          ],
+          publishedAt: new Date(),
+          revision: 2,
+          schemaVersion: 2,
+          siteId: site.id,
+          status: "PUBLISHED",
+        },
+      ],
+    });
+    const metrics = new ContentMetrics();
+    const service = new ContentVersioningService(prisma, metrics);
+
+    try {
+      const restored = await service.restoreRevision(actor.id, site.id, entry.id, "1", 2);
+      expect(restored).toMatchObject({
+        contentLocales: [
+          {
+            data: { title: "Historical title" },
+            localeId: locale.id,
+            schemaVersion: 1,
+          },
+        ],
+        publishedAt: null,
+        revision: 3,
+        schemaVersion: 1,
+        status: "DRAFT",
+      });
+      expect(JSON.stringify(restored)).not.toContain("Current summary");
+
+      const snapshots = await prisma.contentEntrySnapshot.findMany({
+        orderBy: { revision: "asc" },
+        where: { contentEntryId: entry.id, siteId: site.id },
+      });
+      expect(
+        snapshots.map(({ revision, schemaVersion, status }) => ({
+          revision,
+          schemaVersion,
+          status,
+        })),
+      ).toEqual([
+        { revision: 1, schemaVersion: 1, status: "DRAFT" },
+        { revision: 2, schemaVersion: 2, status: "PUBLISHED" },
+        { revision: 3, schemaVersion: 1, status: "DRAFT" },
+      ]);
+      expect(snapshots[0]?.locales).toEqual(snapshots[2]?.locales);
+      await expect(
+        prisma.auditEvent.findFirstOrThrow({
+          where: {
+            action: "content.entry.revision.restored",
+            actorId: actor.id,
+            entityId: entry.id,
+          },
+        }),
+      ).resolves.toMatchObject({
+        metadata: {
+          previousRevision: 2,
+          restoredFromRevision: 1,
+          revision: 3,
+          schemaVersion: 1,
+          siteId: site.id,
+        },
+      });
+      expect(metrics.render()).toContain(
+        'nexora_content_revision_restorations_total{outcome="success"} 1',
+      );
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
   it("allows only one concurrent workflow transition and audit event per revision", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
     const actor = await prisma.user.create({
