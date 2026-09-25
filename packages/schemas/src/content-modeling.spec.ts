@@ -10,12 +10,16 @@ import {
   contentEntryStatusUpdateSchema,
   contentEntryTransitionAuditMetadataSchema,
   contentEntryWorkflowTransitions,
+  contentPlacementUpdateSchema,
   contentSchemaVersionSchema,
   contentTypeCreateSchema,
   contentTypeKeySchema,
   contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
   findContentEntryWorkflowTransition,
+  sectionCreateSchema,
+  sectionRoleAssignmentCreateSchema,
+  sectionUpdateSchema,
 } from "./index.js";
 
 describe("content modeling contracts", () => {
@@ -273,5 +277,34 @@ describe("content modeling contracts", () => {
         note: "x".repeat(4_001),
       }).success,
     ).toBe(false);
+  });
+
+  it("validates sections, placements, and section-scoped roles", () => {
+    const sectionId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    const userId = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
+
+    expect(sectionCreateSchema.parse({ key: "latest-news", name: " Latest news " })).toEqual({
+      key: "latest-news",
+      name: "Latest news",
+      parentId: null,
+    });
+    expect(sectionCreateSchema.safeParse({ key: "Latest News", name: "News" }).success).toBe(false);
+    expect(sectionUpdateSchema.parse({ name: "Local", parentId: sectionId })).toEqual({
+      name: "Local",
+      parentId: sectionId,
+    });
+    expect(contentPlacementUpdateSchema.parse({ isPrimary: true, position: 4 })).toEqual({
+      isPrimary: true,
+      isVisible: true,
+      position: 4,
+    });
+    expect(contentPlacementUpdateSchema.safeParse({ position: -1 }).success).toBe(false);
+    expect(sectionRoleAssignmentCreateSchema.parse({ roleKey: "editor", userId })).toEqual({
+      roleKey: "editor",
+      userId,
+    });
+    expect(sectionRoleAssignmentCreateSchema.safeParse({ roleKey: "owner", userId }).success).toBe(
+      false,
+    );
   });
 });
