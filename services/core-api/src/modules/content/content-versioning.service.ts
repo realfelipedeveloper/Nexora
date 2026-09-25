@@ -239,6 +239,7 @@ export class ContentVersioningService {
             previousRevision: expectedRevision,
             restoredFromRevision,
             revision,
+            schemaVersion: snapshot.schemaVersion,
             siteId,
           },
         },
