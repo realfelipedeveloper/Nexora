@@ -2088,6 +2088,194 @@ describe("PostgreSQL migrations and integration", () => {
     }
   }, 120_000);
 
+  it("rolls back a restoration when its audit event cannot be recorded", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const actor = await prisma.user.create({
+      data: {
+        displayName: "Restoration Rollback Editor",
+        email: "restoration.rollback.editor@example.com",
+        normalizedEmail: "restoration.rollback.editor@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const site = await prisma.site.create({
+      data: { key: "restoration-rollback", name: "Restoration Rollback" },
+    });
+    const locale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: site.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Rollback Article",
+        key: "rollback-article",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Rollback Article",
+              fields: [{ fieldType: "text", key: "title", required: true }],
+              key: "rollback-article",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: site.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: {
+          create: {
+            data: { title: "Current content must survive" },
+            localeId: locale.id,
+            schemaVersion: 1,
+          },
+        },
+        contentTypeId: contentType.id,
+        publishedAt: new Date(),
+        revision: 2,
+        schemaVersion: 1,
+        siteId: site.id,
+        status: "PUBLISHED",
+      },
+    });
+    await prisma.contentEntrySnapshot.createMany({
+      data: [
+        {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { title: "Historical content" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 1,
+            },
+          ],
+          revision: 1,
+          schemaVersion: 1,
+          siteId: site.id,
+          status: "DRAFT",
+        },
+        {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { title: "Current content must survive" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 1,
+            },
+          ],
+          publishedAt: new Date(),
+          revision: 2,
+          schemaVersion: 1,
+          siteId: site.id,
+          status: "PUBLISHED",
+        },
+      ],
+    });
+    const metrics = new ContentMetrics();
+    const service = new ContentVersioningService(prisma, metrics);
+
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION nexora_fail_revision_restore_audit()
+        RETURNS trigger AS $$
+        BEGIN
+          IF NEW.action = 'content.entry.revision.restored' THEN
+            RAISE EXCEPTION 'forced content revision restoration audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER nexora_fail_revision_restore_audit
+        BEFORE INSERT ON "AuditEvent"
+        FOR EACH ROW EXECUTE FUNCTION nexora_fail_revision_restore_audit()
+      `);
+
+      await expect(service.restoreRevision(actor.id, site.id, entry.id, "1", 2)).rejects.toThrow(
+        "forced content revision restoration audit failure",
+      );
+      const rolledBack = await prisma.contentEntry.findUniqueOrThrow({
+        include: { contentLocales: true },
+        where: { id_siteId: { id: entry.id, siteId: site.id } },
+      });
+      expect(rolledBack).toMatchObject({
+        contentLocales: [
+          {
+            data: { title: "Current content must survive" },
+            localeId: locale.id,
+            schemaVersion: 1,
+          },
+        ],
+        publishedAt: expect.any(Date),
+        revision: 2,
+        schemaVersion: 1,
+        status: "PUBLISHED",
+      });
+      await expect(
+        prisma.contentEntrySnapshot.count({
+          where: { contentEntryId: entry.id, siteId: site.id },
+        }),
+      ).resolves.toBe(2);
+      await expect(
+        prisma.auditEvent.count({
+          where: { action: "content.entry.revision.restored", entityId: entry.id },
+        }),
+      ).resolves.toBe(0);
+      expect(metrics.render()).not.toContain(
+        'nexora_content_revision_restorations_total{outcome="success"}',
+      );
+
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER nexora_fail_revision_restore_audit ON "AuditEvent"',
+      );
+      await prisma.$executeRawUnsafe("DROP FUNCTION nexora_fail_revision_restore_audit()");
+
+      const restored = await service.restoreRevision(actor.id, site.id, entry.id, "1", 2);
+      expect(restored).toMatchObject({ revision: 3, status: "DRAFT" });
+      const auditEvents = await prisma.auditEvent.findMany({
+        where: { action: "content.entry.revision.restored", entityId: entry.id },
+      });
+      expect(auditEvents).toHaveLength(1);
+      expect(auditEvents[0]).toMatchObject({
+        actorId: actor.id,
+        entity: "ContentEntry",
+        metadata: {
+          previousRevision: 2,
+          restoredFromRevision: 1,
+          revision: 3,
+          schemaVersion: 1,
+          siteId: site.id,
+        },
+      });
+      expect(JSON.stringify(auditEvents)).not.toContain("Historical content");
+      expect(JSON.stringify(auditEvents)).not.toContain("Current content must survive");
+      await expect(
+        prisma.contentEntrySnapshot.count({
+          where: { contentEntryId: entry.id, siteId: site.id },
+        }),
+      ).resolves.toBe(3);
+      expect(metrics.render()).toContain(
+        'nexora_content_revision_restorations_total{outcome="success"} 1',
+      );
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS nexora_fail_revision_restore_audit ON "AuditEvent"',
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS nexora_fail_revision_restore_audit()",
+      );
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
   it("allows only one concurrent workflow transition and audit event per revision", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
     const actor = await prisma.user.create({
