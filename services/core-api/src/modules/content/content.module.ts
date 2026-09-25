@@ -13,6 +13,13 @@ import { ContentVersioningController } from "./content-versioning.controller.js"
 import { ContentVersioningService } from "./content-versioning.service.js";
 import { SectionPlacementsController, SectionsController } from "./section-placement.controller.js";
 import { SectionPlacementService } from "./section-placement.service.js";
+import {
+  MenusController,
+  PublicNavigationController,
+  RedirectsController,
+  RoutesController,
+} from "./navigation-routing.controller.js";
+import { NavigationRoutingService } from "./navigation-routing.service.js";
 
 @Module({
   controllers: [
@@ -21,6 +28,10 @@ import { SectionPlacementService } from "./section-placement.service.js";
     ContentTypesController,
     ContentVersioningController,
     PublicContentController,
+    PublicNavigationController,
+    MenusController,
+    RedirectsController,
+    RoutesController,
     SectionPlacementsController,
     SectionsController,
   ],
@@ -31,6 +42,7 @@ import { SectionPlacementService } from "./section-placement.service.js";
     ContentMetrics,
     ContentVersioningService,
     PublicContentService,
+    NavigationRoutingService,
     SectionPlacementService,
   ],
   imports: [DatabaseModule, IdentityModule],
@@ -41,6 +53,7 @@ import { SectionPlacementService } from "./section-placement.service.js";
     ContentMetrics,
     ContentVersioningService,
     PublicContentService,
+    NavigationRoutingService,
     SectionPlacementService,
   ],
 })

@@ -18,6 +18,19 @@ type SectionMutation =
   | "section_created"
   | "section_deleted"
   | "section_updated";
+type NavigationMutation =
+  | "item_created"
+  | "item_deleted"
+  | "item_updated"
+  | "menu_created"
+  | "menu_deleted"
+  | "menu_updated"
+  | "redirect_created"
+  | "redirect_deleted"
+  | "route_created"
+  | "route_deleted"
+  | "route_updated";
+type RoutingResolution = "alias" | "menu" | "redirect" | "route";
 
 @Injectable()
 export class ContentMetrics {
@@ -28,6 +41,8 @@ export class ContentMetrics {
   private readonly revisionRestorations = new Map<ContentRevisionRestorationOutcome, number>();
   private readonly reviewDecisions = new Map<ContentEntryReviewDecision, number>();
   private readonly sectionMutations = new Map<SectionMutation, number>();
+  private readonly navigationMutations = new Map<NavigationMutation, number>();
+  private readonly routingResolutions = new Map<RoutingResolution, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -52,6 +67,14 @@ export class ContentMetrics {
 
   recordSectionMutation(operation: SectionMutation) {
     this.sectionMutations.set(operation, (this.sectionMutations.get(operation) ?? 0) + 1);
+  }
+
+  recordNavigationMutation(operation: NavigationMutation) {
+    this.navigationMutations.set(operation, (this.navigationMutations.get(operation) ?? 0) + 1);
+  }
+
+  recordRoutingResolution(result: RoutingResolution) {
+    this.routingResolutions.set(result, (this.routingResolutions.get(result) ?? 0) + 1);
   }
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
@@ -102,6 +125,14 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_section_mutations_total counter");
     for (const [operation, count] of [...this.sectionMutations.entries()].sort()) {
       lines.push(`nexora_section_mutations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_navigation_mutations_total counter");
+    for (const [operation, count] of [...this.navigationMutations.entries()].sort()) {
+      lines.push(`nexora_navigation_mutations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_routing_resolutions_total counter");
+    for (const [result, count] of [...this.routingResolutions.entries()].sort()) {
+      lines.push(`nexora_routing_resolutions_total{result="${result}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {

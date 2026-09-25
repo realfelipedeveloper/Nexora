@@ -17,6 +17,12 @@ import {
   contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
   findContentEntryWorkflowTransition,
+  menuCreateSchema,
+  menuItemWriteSchema,
+  redirectCreateSchema,
+  routeCreateSchema,
+  routePathSchema,
+  routeUpdateSchema,
   sectionCreateSchema,
   sectionRoleAssignmentCreateSchema,
   sectionUpdateSchema,
@@ -306,5 +312,62 @@ describe("content modeling contracts", () => {
     expect(sectionRoleAssignmentCreateSchema.safeParse({ roleKey: "owner", userId }).success).toBe(
       false,
     );
+  });
+
+  it("validates navigation targets and normalized route paths", () => {
+    const localeId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    const routeId = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
+
+    expect(menuCreateSchema.parse({ key: "main", localeId, name: " Principal " })).toEqual({
+      key: "main",
+      localeId,
+      name: "Principal",
+    });
+    expect(routePathSchema.safeParse("/noticias/institucional").success).toBe(true);
+    expect(routePathSchema.safeParse("/Noticias?draft=true").success).toBe(false);
+    expect(
+      menuItemWriteSchema.parse({ label: "Início", linkType: "INTERNAL", routeId }),
+    ).toMatchObject({ externalUrl: null, isVisible: true, routeId });
+    expect(
+      menuItemWriteSchema.safeParse({
+        externalUrl: "https://example.com",
+        label: "Inválido",
+        linkType: "INTERNAL",
+        routeId,
+      }).success,
+    ).toBe(false);
+    expect(
+      menuItemWriteSchema.parse({
+        externalUrl: "https://example.com",
+        label: "Externo",
+        linkType: "EXTERNAL",
+      }),
+    ).toMatchObject({ externalUrl: "https://example.com", routeId: null });
+    expect(
+      menuItemWriteSchema.safeParse({
+        externalUrl: "javascript:alert(1)",
+        label: "Inseguro",
+        linkType: "EXTERNAL",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates route and redirect contracts", () => {
+    const localeId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    expect(routeCreateSchema.parse({ localeId, path: "/sobre" })).toEqual({
+      contentEntryId: null,
+      localeId,
+      path: "/sobre",
+    });
+    expect(routeUpdateSchema.safeParse({ contentEntryId: null, path: "/nova-rota" }).success).toBe(
+      true,
+    );
+    expect(
+      redirectCreateSchema.parse({ localeId, sourcePath: "/antiga", targetPath: "/nova" }),
+    ).toMatchObject({ statusCode: 301 });
+    expect(
+      redirectCreateSchema.safeParse({ localeId, sourcePath: "/igual", targetPath: "/igual" })
+        .success,
+    ).toBe(false);
   });
 });

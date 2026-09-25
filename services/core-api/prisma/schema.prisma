@@ -28,6 +28,17 @@ enum ContentEntryReviewDecision {
   CHANGES_REQUESTED
 }
 
+enum MenuItemLinkType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum RoutingPathKind {
+  ROUTE
+  ALIAS
+  REDIRECT
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -82,6 +93,12 @@ model Site {
   editorialComments  ContentEntryComment[]
   editorialReviews   ContentEntryReview[]
   contentPlacements  ContentPlacement[]
+  menus              Menu[]
+  menuItems          MenuItem[]
+  routingPaths       RoutingPath[]
+  routes             Route[]
+  routeAliases       RouteAlias[]
+  redirects          Redirect[]
   roleAssignments    SiteRoleAssignment[]
   sectionAssignments SectionRoleAssignment[]
   sections           Section[]
@@ -169,6 +186,11 @@ model Locale {
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   contentLocales ContentLocale[]
+  menus          Menu[]
+  routingPaths   RoutingPath[]
+  routes         Route[]
+  routeAliases   RouteAlias[]
+  redirects      Redirect[]
 
   @@unique([siteId, code])
   @@unique([id, siteId])
@@ -234,6 +256,126 @@ model SectionRoleAssignment {
   @@index([userId, siteId])
   @@index([roleKey])
   @@index([grantedById])
+}
+
+model Menu {
+  id        String   @id @default(uuid())
+  siteId    String
+  localeId  String
+  key       String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  site   Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale Locale     @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  items  MenuItem[]
+
+  @@unique([id, siteId])
+  @@unique([siteId, localeId, key])
+  @@index([siteId, localeId, createdAt, id])
+}
+
+model MenuItem {
+  id          String           @id @default(uuid())
+  siteId      String
+  menuId      String
+  parentId    String?
+  label       String
+  position    Int              @default(0)
+  isVisible   Boolean          @default(true)
+  linkType    MenuItemLinkType
+  routeId     String?
+  externalUrl String?          @db.VarChar(2048)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  site     Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  menu     Menu       @relation(fields: [menuId, siteId], references: [id, siteId], onDelete: Cascade)
+  parent   MenuItem?  @relation("MenuItemHierarchy", fields: [parentId, menuId], references: [id, menuId], onDelete: Cascade)
+  children MenuItem[] @relation("MenuItemHierarchy")
+  route    Route?     @relation(fields: [routeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([id, menuId])
+  @@index([siteId, menuId, parentId, isVisible, position, id])
+  @@index([siteId, routeId])
+}
+
+model RoutingPath {
+  id        String          @id @default(uuid())
+  siteId    String
+  localeId  String
+  path      String          @db.VarChar(1024)
+  kind      RoutingPathKind
+  createdAt DateTime        @default(now())
+
+  site     Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale   Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  route    Route?
+  alias    RouteAlias?
+  redirect Redirect?
+
+  @@unique([id, siteId, localeId])
+  @@unique([siteId, localeId, path])
+  @@index([siteId, localeId, kind, createdAt, id])
+}
+
+model Route {
+  id             String   @id @default(uuid())
+  siteId         String
+  localeId       String
+  pathId         String   @unique
+  contentEntryId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale       Locale        @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  path         RoutingPath   @relation(fields: [pathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Restrict)
+  contentEntry ContentEntry? @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Restrict)
+  aliases      RouteAlias[]
+  menuItems    MenuItem[]
+
+  @@unique([id, siteId])
+  @@unique([id, siteId, localeId])
+  @@unique([pathId, siteId, localeId])
+  @@index([siteId, localeId, createdAt, id])
+  @@index([siteId, contentEntryId])
+}
+
+model RouteAlias {
+  id        String   @id @default(uuid())
+  siteId    String
+  localeId  String
+  pathId    String   @unique
+  routeId   String
+  createdAt DateTime @default(now())
+
+  site   Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  path   RoutingPath @relation(fields: [pathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+  route  Route       @relation(fields: [routeId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+
+  @@unique([pathId, siteId, localeId])
+  @@index([siteId, localeId, routeId, createdAt])
+}
+
+model Redirect {
+  id           String   @id @default(uuid())
+  siteId       String
+  localeId     String
+  sourcePathId String   @unique
+  targetPath   String   @db.VarChar(1024)
+  statusCode   Int      @default(301)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale     Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  sourcePath RoutingPath @relation(fields: [sourcePathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+
+  @@unique([sourcePathId, siteId, localeId])
+  @@index([siteId, localeId, createdAt, id])
 }
 
 model ContentType {
@@ -306,6 +448,7 @@ model ContentEntry {
   editorialReviews         ContentEntryReview[]
   snapshots                ContentEntrySnapshot[]
   placements               ContentPlacement[]
+  routes                   Route[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])

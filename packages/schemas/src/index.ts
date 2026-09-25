@@ -409,6 +409,74 @@ export const sectionRoleAssignmentCreateSchema = z.strictObject({
   userId: z.string().uuid(),
 });
 
+export const routePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_024)
+  .regex(/^\/(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)*[a-z0-9]+(?:-[a-z0-9]+)*$|^\/$/u);
+
+export const menuCreateSchema = z.strictObject({
+  key: contentTypeKeySchema,
+  localeId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120),
+});
+
+export const menuUpdateSchema = z.strictObject({
+  name: z.string().trim().min(1).max(120),
+});
+
+const menuItemBaseSchema = z.strictObject({
+  externalUrl: z
+    .url()
+    .max(2_048)
+    .refine((value) => /^https?:\/\//iu.test(value), "External links must use HTTP or HTTPS.")
+    .nullable()
+    .default(null),
+  isVisible: z.boolean().default(true),
+  label: z.string().trim().min(1).max(160),
+  linkType: z.enum(["INTERNAL", "EXTERNAL"]),
+  parentId: z.string().uuid().nullable().default(null),
+  position: z.number().int().nonnegative().max(2_147_483_647).default(0),
+  routeId: z.string().uuid().nullable().default(null),
+});
+
+export const menuItemWriteSchema = menuItemBaseSchema.superRefine((item, context) => {
+  const validInternal = item.linkType === "INTERNAL" && item.routeId && !item.externalUrl;
+  const validExternal = item.linkType === "EXTERNAL" && item.externalUrl && !item.routeId;
+  if (!validInternal && !validExternal) {
+    context.addIssue({
+      code: "custom",
+      message: "Menu item target does not match its link type.",
+    });
+  }
+});
+
+export const routeCreateSchema = z.strictObject({
+  contentEntryId: z.string().uuid().nullable().default(null),
+  localeId: z.string().uuid(),
+  path: routePathSchema,
+});
+
+export const routeUpdateSchema = z.strictObject({
+  contentEntryId: z.string().uuid().nullable(),
+  path: routePathSchema,
+});
+
+export const redirectCreateSchema = z
+  .strictObject({
+    localeId: z.string().uuid(),
+    sourcePath: routePathSchema,
+    statusCode: z
+      .union([z.literal(301), z.literal(302), z.literal(307), z.literal(308)])
+      .default(301),
+    targetPath: routePathSchema,
+  })
+  .refine((redirect) => redirect.sourcePath !== redirect.targetPath, {
+    message: "Redirect source and target must differ.",
+    path: ["targetPath"],
+  });
+
 export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>;
 export type ContentTypeCreateInput = z.infer<typeof contentTypeCreateSchema>;
 export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
@@ -423,3 +491,9 @@ export type SectionCreateInput = z.infer<typeof sectionCreateSchema>;
 export type SectionUpdateInput = z.infer<typeof sectionUpdateSchema>;
 export type ContentPlacementUpdateInput = z.infer<typeof contentPlacementUpdateSchema>;
 export type SectionRoleAssignmentCreateInput = z.infer<typeof sectionRoleAssignmentCreateSchema>;
+export type MenuCreateInput = z.infer<typeof menuCreateSchema>;
+export type MenuUpdateInput = z.infer<typeof menuUpdateSchema>;
+export type MenuItemWriteInput = z.infer<typeof menuItemWriteSchema>;
+export type RouteCreateInput = z.infer<typeof routeCreateSchema>;
+export type RouteUpdateInput = z.infer<typeof routeUpdateSchema>;
+export type RedirectCreateInput = z.infer<typeof redirectCreateSchema>;
