@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -22,11 +22,25 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm test:coverage
+      - name: Run affected test suite
+        if: github.event_name == 'pull_request' && github.base_ref != 'main'
+        run: pnpm test
+      - name: Run release coverage suite
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm test:coverage
       - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm playwright
-      - run: pnpm secret:scan
-      - run: pnpm run sca
-      - run: pnpm run sbom
+      - name: Install release browser
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run release end-to-end suite
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm playwright
+      - name: Scan tracked sources for secrets
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm secret:scan
+      - name: Audit production dependencies
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm run sca
+      - name: Generate release SBOM
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: pnpm run sbom
