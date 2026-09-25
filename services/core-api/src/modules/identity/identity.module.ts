@@ -5,6 +5,8 @@ import { IDENTITY_CONFIGURATION, identityConfiguration } from "./identity.config
 import { IdentityController } from "./identity.controller.js";
 import { IdentityService } from "./identity.service.js";
 import { SessionAuthenticationGuard } from "./session-authentication.guard.js";
+import { SectionAccessService } from "./section-access.service.js";
+import { SectionAuthorizationGuard } from "./section-authorization.guard.js";
 import { SiteAccessController } from "./site-access.controller.js";
 import { SiteAccessService } from "./site-access.service.js";
 import { SiteAuthorizationGuard } from "./site-authorization.guard.js";
@@ -16,6 +18,8 @@ import { SiteAuthorizationGuard } from "./site-authorization.guard.js";
     IdentityService,
     SessionAuthenticationGuard,
     SessionCsrfGuard,
+    SectionAccessService,
+    SectionAuthorizationGuard,
     SiteAccessService,
     SiteAuthorizationGuard,
     SystemAdministratorGuard,
@@ -25,6 +29,8 @@ import { SiteAuthorizationGuard } from "./site-authorization.guard.js";
     IdentityService,
     SessionAuthenticationGuard,
     SessionCsrfGuard,
+    SectionAccessService,
+    SectionAuthorizationGuard,
     SiteAccessService,
     SiteAuthorizationGuard,
     SystemAdministratorGuard,

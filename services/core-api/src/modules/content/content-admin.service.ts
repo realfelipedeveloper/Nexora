@@ -81,6 +81,12 @@ const contentEntrySummarySelection = {
   updatedAt: true,
 } as const;
 
+const contentPlacementOrder: Prisma.ContentPlacementOrderByWithRelationInput[] = [
+  { isPrimary: "desc" },
+  { position: "asc" },
+  { id: "asc" },
+];
+
 const contentEntryDetailSelection = {
   ...contentEntrySummarySelection,
   contentLocales: {
@@ -93,6 +99,17 @@ const contentEntryDetailSelection = {
       localeId: true,
       revision: true,
       schemaVersion: true,
+      updatedAt: true,
+    },
+  },
+  placements: {
+    orderBy: contentPlacementOrder,
+    select: {
+      id: true,
+      isPrimary: true,
+      isVisible: true,
+      position: true,
+      section: { select: { id: true, key: true, name: true } },
       updatedAt: true,
     },
   },

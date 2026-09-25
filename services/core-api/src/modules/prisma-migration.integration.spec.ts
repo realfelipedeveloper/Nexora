@@ -513,6 +513,12 @@ describe("PostgreSQL migrations and integration", () => {
           data: { key: "blank-name", name: "   ", siteId: firstSite.id },
         }),
       ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.section.update({
+          data: { parentId: grandchild.id },
+          where: { id: root.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
       await expect(prisma.section.delete({ where: { id: root.id } })).rejects.toMatchObject({
         code: "P2003",
       });
@@ -520,6 +526,132 @@ describe("PostgreSQL migrations and integration", () => {
       await prisma.site.delete({ where: { id: firstSite.id } });
       await expect(prisma.section.count({ where: { siteId: firstSite.id } })).resolves.toBe(0);
       await expect(prisma.section.count({ where: { siteId: secondSite.id } })).resolves.toBe(1);
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("enforces content placement, primary section, ordering, visibility, and section RBAC", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const [firstSite, secondSite] = await Promise.all([
+        prisma.site.create({ data: { key: "placement-first", name: "Placement First" } }),
+        prisma.site.create({ data: { key: "placement-second", name: "Placement Second" } }),
+      ]);
+      const [firstSection, secondSection, invalidSection, foreignSection] = await Promise.all([
+        prisma.section.create({ data: { key: "news", name: "News", siteId: firstSite.id } }),
+        prisma.section.create({
+          data: { key: "featured", name: "Featured", siteId: firstSite.id },
+        }),
+        prisma.section.create({ data: { key: "invalid", name: "Invalid", siteId: firstSite.id } }),
+        prisma.section.create({ data: { key: "news", name: "News", siteId: secondSite.id } }),
+      ]);
+      const contentType = await prisma.contentType.create({
+        data: {
+          displayName: "Placement Article",
+          key: "placement-article",
+          schemaVersions: {
+            create: {
+              definition: {
+                displayName: "Placement Article",
+                fields: [],
+                key: "placement-article",
+                version: 1,
+              },
+              version: 1,
+            },
+          },
+          siteId: firstSite.id,
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, siteId: firstSite.id },
+      });
+
+      const primary = await prisma.contentPlacement.create({
+        data: {
+          contentEntryId: entry.id,
+          isPrimary: true,
+          position: 10,
+          sectionId: firstSection.id,
+          siteId: firstSite.id,
+        },
+      });
+      const secondary = await prisma.contentPlacement.create({
+        data: {
+          contentEntryId: entry.id,
+          isVisible: false,
+          position: 2,
+          sectionId: secondSection.id,
+          siteId: firstSite.id,
+        },
+      });
+
+      await expect(
+        prisma.contentPlacement.findMany({
+          orderBy: [{ position: "asc" }, { id: "asc" }],
+          where: { contentEntryId: entry.id, siteId: firstSite.id },
+        }),
+      ).resolves.toMatchObject([
+        { id: secondary.id, isPrimary: false, isVisible: false, position: 2 },
+        { id: primary.id, isPrimary: true, isVisible: true, position: 10 },
+      ]);
+      await expect(
+        prisma.contentPlacement.update({
+          data: { isPrimary: true },
+          where: { id: secondary.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+      await expect(
+        prisma.contentPlacement.create({
+          data: {
+            contentEntryId: entry.id,
+            position: -1,
+            sectionId: invalidSection.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.contentPlacement.create({
+          data: {
+            contentEntryId: entry.id,
+            sectionId: foreignSection.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+
+      const user = await prisma.user.create({
+        data: {
+          displayName: "Section Editor",
+          email: "section.editor@example.com",
+          normalizedEmail: "section.editor@example.com",
+          passwordHash: "not-used-by-this-test",
+        },
+      });
+      await expect(
+        prisma.sectionRoleAssignment.create({
+          data: {
+            grantedById: user.id,
+            roleKey: "editor",
+            sectionId: firstSection.id,
+            siteId: firstSite.id,
+            userId: user.id,
+          },
+        }),
+      ).resolves.toMatchObject({ roleKey: "editor", sectionId: firstSection.id });
+      await expect(
+        prisma.sectionRoleAssignment.create({
+          data: {
+            roleKey: "viewer",
+            sectionId: foreignSection.id,
+            siteId: firstSite.id,
+            userId: user.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
     } finally {
       await prisma.$disconnect();
     }

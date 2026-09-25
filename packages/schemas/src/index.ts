@@ -385,6 +385,30 @@ export const contentEntryReviewCreateSchema = z
     }
   });
 
+export const sectionKeySchema = contentTypeKeySchema;
+
+export const sectionCreateSchema = z.strictObject({
+  key: sectionKeySchema,
+  name: z.string().trim().min(1).max(120),
+  parentId: z.string().uuid().nullable().default(null),
+});
+
+export const sectionUpdateSchema = z.strictObject({
+  name: z.string().trim().min(1).max(120),
+  parentId: z.string().uuid().nullable(),
+});
+
+export const contentPlacementUpdateSchema = z.strictObject({
+  isPrimary: z.boolean().default(false),
+  isVisible: z.boolean().default(true),
+  position: z.number().int().nonnegative().max(2_147_483_647).default(0),
+});
+
+export const sectionRoleAssignmentCreateSchema = z.strictObject({
+  roleKey: z.enum(["viewer", "editor", "publisher", "site-admin"]),
+  userId: z.string().uuid(),
+});
+
 export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>;
 export type ContentTypeCreateInput = z.infer<typeof contentTypeCreateSchema>;
 export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
@@ -395,3 +419,7 @@ export type ContentEntryAssignmentCreateInput = z.infer<typeof contentEntryAssig
 export type ContentEntryCommentCreateInput = z.infer<typeof contentEntryCommentCreateSchema>;
 export type ContentEntryReviewDecision = z.infer<typeof contentEntryReviewDecisionSchema>;
 export type ContentEntryReviewCreateInput = z.infer<typeof contentEntryReviewCreateSchema>;
+export type SectionCreateInput = z.infer<typeof sectionCreateSchema>;
+export type SectionUpdateInput = z.infer<typeof sectionUpdateSchema>;
+export type ContentPlacementUpdateInput = z.infer<typeof contentPlacementUpdateSchema>;
+export type SectionRoleAssignmentCreateInput = z.infer<typeof sectionRoleAssignmentCreateSchema>;

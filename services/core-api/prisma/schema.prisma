@@ -43,6 +43,8 @@ model User {
   sessions                Session[]
   siteRoleAssignments     SiteRoleAssignment[]     @relation("SiteRoleUser")
   siteRoleGrants          SiteRoleAssignment[]     @relation("SiteRoleGrantedBy")
+  sectionRoleAssignments  SectionRoleAssignment[]  @relation("SectionRoleUser")
+  sectionRoleGrants       SectionRoleAssignment[]  @relation("SectionRoleGrantedBy")
   contentAssignments      ContentEntryAssignment[] @relation("ContentEntryAssignee")
   contentAssignmentGrants ContentEntryAssignment[] @relation("ContentEntryAssignedBy")
   editorialComments       ContentEntryComment[]
@@ -79,7 +81,9 @@ model Site {
   contentAssignments ContentEntryAssignment[]
   editorialComments  ContentEntryComment[]
   editorialReviews   ContentEntryReview[]
+  contentPlacements  ContentPlacement[]
   roleAssignments    SiteRoleAssignment[]
+  sectionAssignments SectionRoleAssignment[]
   sections           Section[]
   settings           SiteSetting[]
 
@@ -120,8 +124,9 @@ model Role {
   name        String
   description String
 
-  permissions     RolePermission[]
-  siteAssignments SiteRoleAssignment[]
+  permissions        RolePermission[]
+  siteAssignments    SiteRoleAssignment[]
+  sectionAssignments SectionRoleAssignment[]
 }
 
 model RolePermission {
@@ -178,13 +183,57 @@ model Section {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  parent   Section?  @relation("SectionHierarchy", fields: [parentId, siteId], references: [id, siteId], onDelete: Restrict)
-  children Section[] @relation("SectionHierarchy")
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  parent          Section?                @relation("SectionHierarchy", fields: [parentId, siteId], references: [id, siteId], onDelete: Restrict)
+  children        Section[]               @relation("SectionHierarchy")
+  placements      ContentPlacement[]
+  roleAssignments SectionRoleAssignment[]
 
   @@unique([id, siteId])
   @@unique([siteId, key])
   @@index([siteId, parentId, createdAt, id])
+}
+
+model ContentPlacement {
+  id             String   @id @default(uuid())
+  siteId         String
+  sectionId      String
+  contentEntryId String
+  isPrimary      Boolean  @default(false)
+  position       Int      @default(0)
+  isVisible      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  section      Section      @relation(fields: [sectionId, siteId], references: [id, siteId], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+
+  @@unique([sectionId, contentEntryId])
+  @@index([siteId, sectionId, isVisible, position, id])
+  @@index([siteId, contentEntryId, isPrimary])
+}
+
+model SectionRoleAssignment {
+  id          String   @id @default(uuid())
+  siteId      String
+  sectionId   String
+  userId      String
+  roleKey     String
+  grantedById String?
+  createdAt   DateTime @default(now())
+
+  site      Site    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  section   Section @relation(fields: [sectionId, siteId], references: [id, siteId], onDelete: Cascade)
+  user      User    @relation("SectionRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      Role    @relation(fields: [roleKey], references: [key], onDelete: Restrict)
+  grantedBy User?   @relation("SectionRoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([sectionId, userId, roleKey])
+  @@index([siteId, sectionId, userId])
+  @@index([userId, siteId])
+  @@index([roleKey])
+  @@index([grantedById])
 }
 
 model ContentType {
@@ -256,6 +305,7 @@ model ContentEntry {
   editorialComments        ContentEntryComment[]
   editorialReviews         ContentEntryReview[]
   snapshots                ContentEntrySnapshot[]
+  placements               ContentPlacement[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])

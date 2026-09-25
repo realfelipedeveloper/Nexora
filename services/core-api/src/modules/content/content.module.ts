@@ -11,6 +11,8 @@ import { PublicContentController } from "./content-public.controller.js";
 import { PublicContentService } from "./content-public.service.js";
 import { ContentVersioningController } from "./content-versioning.controller.js";
 import { ContentVersioningService } from "./content-versioning.service.js";
+import { SectionPlacementsController, SectionsController } from "./section-placement.controller.js";
+import { SectionPlacementService } from "./section-placement.service.js";
 
 @Module({
   controllers: [
@@ -19,6 +21,8 @@ import { ContentVersioningService } from "./content-versioning.service.js";
     ContentTypesController,
     ContentVersioningController,
     PublicContentController,
+    SectionPlacementsController,
+    SectionsController,
   ],
   exports: [
     ContentAdminService,
@@ -27,6 +31,7 @@ import { ContentVersioningService } from "./content-versioning.service.js";
     ContentMetrics,
     ContentVersioningService,
     PublicContentService,
+    SectionPlacementService,
   ],
   imports: [DatabaseModule, IdentityModule],
   providers: [
@@ -36,6 +41,7 @@ import { ContentVersioningService } from "./content-versioning.service.js";
     ContentMetrics,
     ContentVersioningService,
     PublicContentService,
+    SectionPlacementService,
   ],
 })
 export class ContentModule {}

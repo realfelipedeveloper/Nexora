@@ -10,6 +10,14 @@ type ContentRevisionRestorationOutcome =
   | "not_found"
   | "precondition_failed"
   | "success";
+type SectionMutation =
+  | "placement_deleted"
+  | "placement_saved"
+  | "role_granted"
+  | "role_revoked"
+  | "section_created"
+  | "section_deleted"
+  | "section_updated";
 
 @Injectable()
 export class ContentMetrics {
@@ -19,6 +27,7 @@ export class ContentMetrics {
   private readonly revisionComparisons = new Map<ContentRevisionComparisonOutcome, number>();
   private readonly revisionRestorations = new Map<ContentRevisionRestorationOutcome, number>();
   private readonly reviewDecisions = new Map<ContentEntryReviewDecision, number>();
+  private readonly sectionMutations = new Map<SectionMutation, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -39,6 +48,10 @@ export class ContentMetrics {
 
   recordReviewDecision(decision: ContentEntryReviewDecision) {
     this.reviewDecisions.set(decision, (this.reviewDecisions.get(decision) ?? 0) + 1);
+  }
+
+  recordSectionMutation(operation: SectionMutation) {
+    this.sectionMutations.set(operation, (this.sectionMutations.get(operation) ?? 0) + 1);
   }
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
@@ -85,6 +98,10 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_content_review_decisions_total counter");
     for (const [decision, count] of [...this.reviewDecisions.entries()].sort()) {
       lines.push(`nexora_content_review_decisions_total{decision="${decision}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_section_mutations_total counter");
+    for (const [operation, count] of [...this.sectionMutations.entries()].sort()) {
+      lines.push(`nexora_section_mutations_total{operation="${operation}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {
