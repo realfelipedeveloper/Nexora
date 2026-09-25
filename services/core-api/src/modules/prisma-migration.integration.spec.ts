@@ -29,6 +29,7 @@ import {
   NavigationConflictError,
   NavigationRoutingService,
 } from "./content/navigation-routing.service.js";
+import { PublicationSchedulerService } from "./content/publication-scheduler.service.js";
 import { PublicContentController } from "./content/content-public.controller.js";
 import { PublicContentService } from "./content/content-public.service.js";
 import { ContentVersioningController } from "./content/content-versioning.controller.js";
@@ -232,10 +233,13 @@ describe("PostgreSQL migrations and integration", () => {
         "ContentLocale",
         "ContentType",
         "ContentTypeSchemaVersion",
+        "DomainEvent",
         "FieldDefinition",
         "GlobalSetting",
         "Locale",
         "Permission",
+        "PublicationSchedule",
+        "PublishedContentEntry",
         "Role",
         "RolePermission",
         "Section",
@@ -1649,7 +1653,7 @@ describe("PostgreSQL migrations and integration", () => {
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
-        .set("If-Match", '"4"')
+        .set("If-Match", '"3"')
         .send({ status: "PUBLISHED" })
         .expect(200);
       expect(repeatedPublish.headers.etag).toBe('"4"');
@@ -1695,6 +1699,14 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 5,
         status: "DRAFT",
       });
+      const repeatedUnpublish = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"4"')
+        .send({ status: "DRAFT" })
+        .expect(200);
+      expect(repeatedUnpublish.body).toMatchObject({ revision: 5, status: "DRAFT" });
 
       await request(app.getHttpServer())
         .get(
@@ -2579,12 +2591,8 @@ describe("PostgreSQL migrations and integration", () => {
           status: "IN_REVIEW",
         }),
       ]);
-      expect(identicalAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
-      expect(identicalAttempts.filter(({ status }) => status === "rejected")).toHaveLength(1);
-      expect(
-        (identicalAttempts.find(({ status }) => status === "rejected") as PromiseRejectedResult)
-          .reason,
-      ).toBeInstanceOf(ContentPreconditionFailedError);
+      expect(identicalAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(2);
+      expect(identicalAttempts.filter(({ status }) => status === "rejected")).toHaveLength(0);
       await expect(
         prisma.contentEntry.findUniqueOrThrow({ where: { id: identicalEntry.id } }),
       ).resolves.toMatchObject({ revision: 2, status: "IN_REVIEW" });
@@ -2662,7 +2670,7 @@ describe("PostgreSQL migrations and integration", () => {
         { revision: 2, status: "IN_REVIEW" },
         { revision: 3, status: finalEntry.status },
       ]);
-      expect(metrics.render()).toContain("nexora_content_precondition_failures_total 2");
+      expect(metrics.render()).toContain("nexora_content_precondition_failures_total 1");
     } finally {
       await prisma.$disconnect();
     }
@@ -3400,6 +3408,19 @@ describe("PostgreSQL migrations and integration", () => {
         status: "PUBLISHED",
       },
     });
+    await prisma.publishedContentEntry.create({
+      data: {
+        contentEntryId: entry.id,
+        contentTypeKey: contentType.key,
+        data: { title: "News" },
+        editorialRevision: entry.revision,
+        localeCode: firstLocale.code,
+        localeId: firstLocale.id,
+        publishedAt: entry.publishedAt as Date,
+        schemaVersion: entry.schemaVersion,
+        siteId: firstSite.id,
+      },
+    });
     const metrics = new ContentMetrics();
     const service = new NavigationRoutingService(prisma, metrics);
 
@@ -3490,6 +3511,145 @@ describe("PostgreSQL migrations and integration", () => {
       ).resolves.toBe(7);
       expect(metrics.render()).toContain(
         'nexora_navigation_mutations_total{operation="route_updated"} 1',
+      );
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("publishes and expires an immutable projection exactly once under concurrent schedulers", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const publisher = await prisma.user.create({
+      data: {
+        displayName: "Scheduled Publisher",
+        email: "scheduled.publisher@example.com",
+        normalizedEmail: "scheduled.publisher@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const site = await prisma.site.create({
+      data: { key: "scheduled-publication", name: "Scheduled Publication" },
+    });
+    const locale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: site.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Scheduled Article",
+        key: "scheduled-article",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Scheduled Article",
+              fields: [{ fieldType: "text", key: "title", required: true }],
+              key: "scheduled-article",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: site.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: {
+          create: { data: { title: "Published snapshot" }, localeId: locale.id },
+        },
+        contentTypeId: contentType.id,
+        siteId: site.id,
+        status: "IN_REVIEW",
+      },
+    });
+    await prisma.contentEntryReview.create({
+      data: {
+        contentEntryId: entry.id,
+        contentRevision: entry.revision,
+        decision: "APPROVED",
+        reviewerId: publisher.id,
+        siteId: site.id,
+      },
+    });
+    const metrics = new ContentMetrics();
+    const scheduler = new PublicationSchedulerService(prisma, metrics);
+    const publicContent = new PublicContentService(prisma, metrics);
+    const dueAt = new Date(Date.now() - 1_000);
+    const publishCommandId = "10000000-0000-4000-8000-000000000101";
+
+    try {
+      const firstSchedule = await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "PUBLISH",
+        commandId: publishCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      const retriedSchedule = await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "PUBLISH",
+        commandId: publishCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      expect(retriedSchedule.id).toBe(firstSchedule.id);
+      await expect(
+        prisma.publicationSchedule.count({ where: { commandId: publishCommandId } }),
+      ).resolves.toBe(1);
+
+      const competingWorkers = await Promise.all([
+        scheduler.processDue(new Date(), 10),
+        scheduler.processDue(new Date(), 10),
+      ]);
+      expect(competingWorkers.reduce((total, result) => total + result.claimed, 0)).toBe(1);
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).resolves.toMatchObject({ revision: 2, status: "PUBLISHED" });
+      await expect(
+        prisma.publishedContentEntry.findUniqueOrThrow({
+          where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+        }),
+      ).resolves.toMatchObject({
+        data: { title: "Published snapshot" },
+        editorialRevision: 2,
+      });
+
+      await prisma.contentLocale.update({
+        data: { data: { title: "Editorial mutation after publication" } },
+        where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+      });
+      await expect(
+        publicContent.get(site.key, contentType.key, entry.id, locale.code),
+      ).resolves.toMatchObject({ data: { title: "Published snapshot" } });
+
+      const expireCommandId = "10000000-0000-4000-8000-000000000102";
+      await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "UNPUBLISH",
+        commandId: expireCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      await expect(scheduler.processDue(new Date(), 10)).resolves.toMatchObject({ claimed: 1 });
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).resolves.toMatchObject({ publishedAt: null, revision: 3, status: "DRAFT" });
+      await expect(
+        prisma.publishedContentEntry.count({
+          where: { contentEntryId: entry.id, siteId: site.id },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        publicContent.get(site.key, contentType.key, entry.id, locale.code),
+      ).resolves.toBeNull();
+      await expect(
+        prisma.domainEvent.count({
+          where: {
+            aggregateId: entry.id,
+            type: { in: ["content.published", "content.unpublished"] },
+          },
+        }),
+      ).resolves.toBe(2);
+      const events = await prisma.domainEvent.findMany({ where: { aggregateId: entry.id } });
+      expect(JSON.stringify(events)).not.toContain("Published snapshot");
+      expect(metrics.render()).toContain(
+        'nexora_publication_operations_total{operation="scheduled_published"} 1',
+      );
+      expect(metrics.render()).toContain(
+        'nexora_publication_operations_total{operation="scheduled_unpublished"} 1',
       );
     } finally {
       await prisma.$disconnect();

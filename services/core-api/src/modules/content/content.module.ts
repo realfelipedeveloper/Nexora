@@ -20,6 +20,8 @@ import {
   RoutesController,
 } from "./navigation-routing.controller.js";
 import { NavigationRoutingService } from "./navigation-routing.service.js";
+import { PublicationSchedulesController } from "./publication-scheduler.controller.js";
+import { PublicationSchedulerService } from "./publication-scheduler.service.js";
 
 @Module({
   controllers: [
@@ -29,6 +31,7 @@ import { NavigationRoutingService } from "./navigation-routing.service.js";
     ContentVersioningController,
     PublicContentController,
     PublicNavigationController,
+    PublicationSchedulesController,
     MenusController,
     RedirectsController,
     RoutesController,
@@ -43,6 +46,7 @@ import { NavigationRoutingService } from "./navigation-routing.service.js";
     ContentVersioningService,
     PublicContentService,
     NavigationRoutingService,
+    PublicationSchedulerService,
     SectionPlacementService,
   ],
   imports: [DatabaseModule, IdentityModule],
@@ -54,6 +58,7 @@ import { NavigationRoutingService } from "./navigation-routing.service.js";
     ContentVersioningService,
     PublicContentService,
     NavigationRoutingService,
+    PublicationSchedulerService,
     SectionPlacementService,
   ],
 })
