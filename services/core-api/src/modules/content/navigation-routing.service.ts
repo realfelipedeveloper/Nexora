@@ -491,7 +491,21 @@ export class NavigationRoutingService {
       include: {
         alias: { include: { route: { include: { path: true } } } },
         redirect: true,
-        route: { include: { contentEntry: { select: { id: true, status: true } }, path: true } },
+        route: {
+          include: {
+            contentEntry: {
+              select: {
+                id: true,
+                publishedProjections: {
+                  select: { id: true },
+                  take: 1,
+                  where: { localeCode },
+                },
+              },
+            },
+            path: true,
+          },
+        },
       },
       where: { locale: { code: localeCode }, path, site: { key: siteKey, status: "ACTIVE" } },
     });
@@ -514,7 +528,9 @@ export class NavigationRoutingService {
       };
     }
     const route = routingPath.route;
-    if (!route || (route.contentEntry && route.contentEntry.status !== "PUBLISHED")) return null;
+    if (!route || (route.contentEntry && route.contentEntry.publishedProjections.length === 0)) {
+      return null;
+    }
     return {
       contentEntryId: route.contentEntry?.id ?? null,
       kind: "route" as const,

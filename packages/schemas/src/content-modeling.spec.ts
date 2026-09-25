@@ -20,6 +20,7 @@ import {
   menuCreateSchema,
   menuItemWriteSchema,
   redirectCreateSchema,
+  publicationScheduleCreateSchema,
   routeCreateSchema,
   routePathSchema,
   routeUpdateSchema,
@@ -368,6 +369,28 @@ describe("content modeling contracts", () => {
     expect(
       redirectCreateSchema.safeParse({ localeId, sourcePath: "/igual", targetPath: "/igual" })
         .success,
+    ).toBe(false);
+  });
+
+  it("validates publication schedules with explicit idempotency commands", () => {
+    const commandId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    expect(
+      publicationScheduleCreateSchema.parse({
+        action: "PUBLISH",
+        commandId,
+        scheduledFor: "2026-09-26T10:00:00-03:00",
+      }),
+    ).toEqual({
+      action: "PUBLISH",
+      commandId,
+      scheduledFor: new Date("2026-09-26T13:00:00.000Z"),
+    });
+    expect(
+      publicationScheduleCreateSchema.safeParse({
+        action: "DELETE",
+        commandId,
+        scheduledFor: "tomorrow",
+      }).success,
     ).toBe(false);
   });
 });

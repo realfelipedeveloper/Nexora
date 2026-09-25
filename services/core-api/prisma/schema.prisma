@@ -39,6 +39,19 @@ enum RoutingPathKind {
   REDIRECT
 }
 
+enum PublicationAction {
+  PUBLISH
+  UNPUBLISH
+}
+
+enum PublicationScheduleStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -60,6 +73,7 @@ model User {
   contentAssignmentGrants ContentEntryAssignment[] @relation("ContentEntryAssignedBy")
   editorialComments       ContentEntryComment[]
   editorialReviews        ContentEntryReview[]
+  publicationSchedules    PublicationSchedule[]    @relation("PublicationScheduleRequestedBy")
 }
 
 model Session {
@@ -85,24 +99,27 @@ model Site {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  locales            Locale[]
-  contentTypes       ContentType[]
-  contentEntries     ContentEntry[]
-  contentSnapshots   ContentEntrySnapshot[]
-  contentAssignments ContentEntryAssignment[]
-  editorialComments  ContentEntryComment[]
-  editorialReviews   ContentEntryReview[]
-  contentPlacements  ContentPlacement[]
-  menus              Menu[]
-  menuItems          MenuItem[]
-  routingPaths       RoutingPath[]
-  routes             Route[]
-  routeAliases       RouteAlias[]
-  redirects          Redirect[]
-  roleAssignments    SiteRoleAssignment[]
-  sectionAssignments SectionRoleAssignment[]
-  sections           Section[]
-  settings           SiteSetting[]
+  locales              Locale[]
+  contentTypes         ContentType[]
+  contentEntries       ContentEntry[]
+  contentSnapshots     ContentEntrySnapshot[]
+  contentAssignments   ContentEntryAssignment[]
+  editorialComments    ContentEntryComment[]
+  editorialReviews     ContentEntryReview[]
+  contentPlacements    ContentPlacement[]
+  menus                Menu[]
+  menuItems            MenuItem[]
+  routingPaths         RoutingPath[]
+  routes               Route[]
+  routeAliases         RouteAlias[]
+  redirects            Redirect[]
+  publishedContent     PublishedContentEntry[]
+  publicationSchedules PublicationSchedule[]
+  domainEvents         DomainEvent[]
+  roleAssignments      SiteRoleAssignment[]
+  sectionAssignments   SectionRoleAssignment[]
+  sections             Section[]
+  settings             SiteSetting[]
 
   @@index([status])
 }
@@ -185,12 +202,13 @@ model Locale {
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  contentLocales ContentLocale[]
-  menus          Menu[]
-  routingPaths   RoutingPath[]
-  routes         Route[]
-  routeAliases   RouteAlias[]
-  redirects      Redirect[]
+  contentLocales   ContentLocale[]
+  menus            Menu[]
+  routingPaths     RoutingPath[]
+  routes           Route[]
+  routeAliases     RouteAlias[]
+  redirects        Redirect[]
+  publishedContent PublishedContentEntry[]
 
   @@unique([siteId, code])
   @@unique([id, siteId])
@@ -449,6 +467,8 @@ model ContentEntry {
   snapshots                ContentEntrySnapshot[]
   placements               ContentPlacement[]
   routes                   Route[]
+  publishedProjections     PublishedContentEntry[]
+  publicationSchedules     PublicationSchedule[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
@@ -546,6 +566,71 @@ model ContentLocale {
 
   @@unique([contentEntryId, localeId])
   @@index([siteId, localeId, updatedAt])
+}
+
+model PublishedContentEntry {
+  id                String   @id @default(uuid())
+  siteId            String
+  contentEntryId    String
+  localeId          String
+  contentTypeKey    String
+  localeCode        String
+  data              Json     @default("{}")
+  schemaVersion     Int
+  editorialRevision Int
+  publishedAt       DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([contentEntryId, localeId])
+  @@index([siteId, contentTypeKey, localeCode, publishedAt(sort: Desc), contentEntryId(sort: Desc)])
+  @@index([siteId, localeId, updatedAt])
+}
+
+model PublicationSchedule {
+  id             String                    @id @default(uuid())
+  commandId      String                    @unique
+  siteId         String
+  contentEntryId String
+  requestedById  String?
+  action         PublicationAction
+  status         PublicationScheduleStatus @default(PENDING)
+  scheduledFor   DateTime
+  claimedAt      DateTime?
+  completedAt    DateTime?
+  failureCode    String?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  requestedBy  User?        @relation("PublicationScheduleRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@unique([id, siteId])
+  @@index([status, scheduledFor, id])
+  @@index([siteId, contentEntryId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model DomainEvent {
+  id            String    @id @default(uuid())
+  siteId        String
+  aggregateType String
+  aggregateId   String
+  type          String
+  revision      Int
+  payload       Json      @default("{}")
+  occurredAt    DateTime  @default(now())
+  publishedAt   DateTime?
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([aggregateId, type, revision])
+  @@index([publishedAt, occurredAt, id])
+  @@index([siteId, aggregateType, aggregateId, occurredAt(sort: Desc)])
 }
 
 model AuditEvent {

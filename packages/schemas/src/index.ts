@@ -358,6 +358,17 @@ export const contentEntryStatusUpdateSchema = z.strictObject({
   status: contentEntryStatusSchema,
 });
 
+export const publicationActions = ["PUBLISH", "UNPUBLISH"] as const;
+export const publicationActionSchema = z.enum(publicationActions);
+
+export const publicationScheduleCreateSchema = z
+  .strictObject({
+    action: publicationActionSchema,
+    commandId: z.string().uuid(),
+    scheduledFor: z.iso.datetime({ offset: true }),
+  })
+  .transform((schedule) => ({ ...schedule, scheduledFor: new Date(schedule.scheduledFor) }));
+
 export const contentEntryAssignmentCreateSchema = z.strictObject({
   assigneeId: z.string().uuid(),
 });
@@ -483,6 +494,8 @@ export type ContentTypeUpdateInput = z.infer<typeof contentTypeUpdateSchema>;
 export type ContentEntryCreateInput = z.infer<typeof contentEntryCreateSchema>;
 export type ContentEntryUpdateInput = z.infer<typeof contentEntryUpdateSchema>;
 export type ContentEntryStatusUpdateInput = z.infer<typeof contentEntryStatusUpdateSchema>;
+export type PublicationAction = z.infer<typeof publicationActionSchema>;
+export type PublicationScheduleCreateInput = z.output<typeof publicationScheduleCreateSchema>;
 export type ContentEntryAssignmentCreateInput = z.infer<typeof contentEntryAssignmentCreateSchema>;
 export type ContentEntryCommentCreateInput = z.infer<typeof contentEntryCommentCreateSchema>;
 export type ContentEntryReviewDecision = z.infer<typeof contentEntryReviewDecisionSchema>;

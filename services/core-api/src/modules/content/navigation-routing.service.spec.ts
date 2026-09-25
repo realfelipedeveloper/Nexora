@@ -281,7 +281,7 @@ describe("navigation routing service", () => {
       .mockResolvedValueOnce({
         kind: "ROUTE",
         route: {
-          contentEntry: { id: "entry", status: "PUBLISHED" },
+          contentEntry: { id: "entry", publishedProjections: [{ id: "projection" }] },
           id: routeId,
           path: { path: "/news" },
         },
@@ -294,7 +294,7 @@ describe("navigation routing service", () => {
       .mockResolvedValueOnce({
         kind: "ROUTE",
         route: {
-          contentEntry: { id: "draft", status: "DRAFT" },
+          contentEntry: { id: "draft", publishedProjections: [] },
           id: routeId,
           path: { path: "/draft" },
         },

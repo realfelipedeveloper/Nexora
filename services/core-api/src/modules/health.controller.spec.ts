@@ -17,6 +17,7 @@ describe("HealthController", () => {
     metrics.recordPreconditionFailure();
     metrics.recordPublicRead("detail", "hit");
     metrics.recordNavigationMutation("route_created");
+    metrics.recordPublicationOperation("published");
     metrics.recordRoutingResolution("route");
     metrics.recordStateTransition("DRAFT", "PUBLISHED");
     const output = new HealthController(metrics).metrics();
@@ -30,5 +31,6 @@ describe("HealthController", () => {
     );
     expect(output).toContain('nexora_navigation_mutations_total{operation="route_created"} 1');
     expect(output).toContain('nexora_routing_resolutions_total{result="route"} 1');
+    expect(output).toContain('nexora_publication_operations_total{operation="published"} 1');
   });
 });

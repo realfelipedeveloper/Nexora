@@ -31,6 +31,14 @@ type NavigationMutation =
   | "route_deleted"
   | "route_updated";
 type RoutingResolution = "alias" | "menu" | "redirect" | "route";
+type PublicationOperation =
+  | "cancelled"
+  | "published"
+  | "schedule_failed"
+  | "scheduled"
+  | "scheduled_published"
+  | "scheduled_unpublished"
+  | "unpublished";
 
 @Injectable()
 export class ContentMetrics {
@@ -43,6 +51,7 @@ export class ContentMetrics {
   private readonly sectionMutations = new Map<SectionMutation, number>();
   private readonly navigationMutations = new Map<NavigationMutation, number>();
   private readonly routingResolutions = new Map<RoutingResolution, number>();
+  private readonly publicationOperations = new Map<PublicationOperation, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -75,6 +84,10 @@ export class ContentMetrics {
 
   recordRoutingResolution(result: RoutingResolution) {
     this.routingResolutions.set(result, (this.routingResolutions.get(result) ?? 0) + 1);
+  }
+
+  recordPublicationOperation(operation: PublicationOperation) {
+    this.publicationOperations.set(operation, (this.publicationOperations.get(operation) ?? 0) + 1);
   }
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
@@ -133,6 +146,10 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_routing_resolutions_total counter");
     for (const [result, count] of [...this.routingResolutions.entries()].sort()) {
       lines.push(`nexora_routing_resolutions_total{result="${result}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_publication_operations_total counter");
+    for (const [operation, count] of [...this.publicationOperations.entries()].sort()) {
+      lines.push(`nexora_publication_operations_total{operation="${operation}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {

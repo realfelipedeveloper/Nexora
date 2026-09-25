@@ -31,8 +31,8 @@ type PublicContentContext = {
 };
 
 type PublicEntryRecord = {
-  contentLocales: Array<{ data: Prisma.JsonValue }>;
-  id: string;
+  contentEntryId: string;
+  data: Prisma.JsonValue;
   publishedAt: Date | null;
   schemaVersion: number;
   updatedAt: Date;
@@ -101,7 +101,7 @@ function encodeCursor(entry: PublicEntryRecord) {
     throw new Error("Published content is missing its publication timestamp.");
   }
   return Buffer.from(
-    JSON.stringify({ id: entry.id, publishedAt: entry.publishedAt.toISOString() }),
+    JSON.stringify({ id: entry.contentEntryId, publishedAt: entry.publishedAt.toISOString() }),
   ).toString("base64url");
 }
 
@@ -124,27 +124,28 @@ function parseQuery(siteKey: string, contentTypeKey: string, query: PublicConten
   };
 }
 
-function cursorFilter(cursor: PublicContentCursor | undefined): Prisma.ContentEntryWhereInput {
+function cursorFilter(
+  cursor: PublicContentCursor | undefined,
+): Prisma.PublishedContentEntryWhereInput {
   if (!cursor) {
     return {};
   }
   return {
     OR: [
       { publishedAt: { lt: cursor.publishedAt } },
-      { id: { lt: cursor.id }, publishedAt: cursor.publishedAt },
+      { contentEntryId: { lt: cursor.id }, publishedAt: cursor.publishedAt },
     ],
   };
 }
 
 function projectEntry(entry: PublicEntryRecord, context: PublicContentContext): PublicContentEntry {
-  const localized = entry.contentLocales[0];
-  if (!entry.publishedAt || !localized) {
+  if (!entry.publishedAt) {
     throw new Error("Published content projection is incomplete.");
   }
   return {
     contentType: { key: context.contentTypeKey },
-    data: localized.data as Record<string, unknown>,
-    id: entry.id,
+    data: entry.data as Record<string, unknown>,
+    id: entry.contentEntryId,
     locale: context.localeCode,
     publishedAt: entry.publishedAt.toISOString(),
     schemaVersion: entry.schemaVersion,
@@ -171,15 +172,11 @@ export class PublicContentService {
       return null;
     }
 
-    const records = await this.prisma.contentEntry.findMany({
-      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+    const records = await this.prisma.publishedContentEntry.findMany({
+      orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
       select: {
-        contentLocales: {
-          select: { data: true },
-          take: 1,
-          where: { localeId: context.localeId },
-        },
-        id: true,
+        contentEntryId: true,
+        data: true,
         publishedAt: true,
         schemaVersion: true,
         updatedAt: true,
@@ -187,11 +184,9 @@ export class PublicContentService {
       take: parsed.limit + 1,
       where: {
         ...cursorFilter(parsed.cursor),
-        contentLocales: { some: { localeId: context.localeId } },
-        contentTypeId: context.contentTypeId,
-        publishedAt: { not: null },
+        contentTypeKey: context.contentTypeKey,
+        localeCode: context.localeCode,
         siteId: context.siteId,
-        status: "PUBLISHED",
       },
     });
     const hasNextPage = records.length > parsed.limit;
@@ -221,25 +216,19 @@ export class PublicContentService {
       return null;
     }
 
-    const entry = await this.prisma.contentEntry.findFirst({
+    const entry = await this.prisma.publishedContentEntry.findFirst({
       select: {
-        contentLocales: {
-          select: { data: true },
-          take: 1,
-          where: { localeId: context.localeId },
-        },
-        id: true,
+        contentEntryId: true,
+        data: true,
         publishedAt: true,
         schemaVersion: true,
         updatedAt: true,
       },
       where: {
-        contentLocales: { some: { localeId: context.localeId } },
-        contentTypeId: context.contentTypeId,
-        id: entryId,
-        publishedAt: { not: null },
+        contentEntryId: entryId,
+        contentTypeKey: context.contentTypeKey,
+        localeCode: context.localeCode,
         siteId: context.siteId,
-        status: "PUBLISHED",
       },
     });
     this.metrics.recordPublicRead("detail", entry ? "hit" : "miss");

@@ -8,7 +8,7 @@ const secondEntryId = "10000000-0000-4000-8000-000000000002";
 
 function fixture() {
   const prisma = {
-    contentEntry: {
+    publishedContentEntry: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
     },
@@ -29,8 +29,8 @@ function publicContext(prisma: ReturnType<typeof fixture>["prisma"]) {
 
 function entry(id = entryId, publishedAt = "2026-09-22T15:00:00.000Z") {
   return {
-    contentLocales: [{ data: { title: "Public article" } }],
-    id,
+    contentEntryId: id,
+    data: { title: "Public article" },
     publishedAt: new Date(publishedAt),
     schemaVersion: 3,
     updatedAt: new Date("2026-09-22T15:01:00.000Z"),
@@ -45,7 +45,7 @@ describe("PublicContentService", () => {
   it("returns a bounded published projection and an opaque cursor", async () => {
     const { metrics, prisma, service } = fixture();
     publicContext(prisma);
-    prisma.contentEntry.findMany.mockResolvedValue([
+    prisma.publishedContentEntry.findMany.mockResolvedValue([
       entry(),
       entry(secondEntryId, "2026-09-22T14:00:00.000Z"),
     ]);
@@ -69,15 +69,14 @@ describe("PublicContentService", () => {
     expect(prisma.site.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { key: "main-site", status: "ACTIVE" } }),
     );
-    expect(prisma.contentEntry.findMany).toHaveBeenCalledWith(
+    expect(prisma.publishedContentEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+        orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
         take: 2,
         where: expect.objectContaining({
-          contentTypeId: "type-1",
-          publishedAt: { not: null },
+          contentTypeKey: "article",
+          localeCode: "pt-BR",
           siteId: "site-1",
-          status: "PUBLISHED",
         }),
       }),
     );
@@ -91,7 +90,7 @@ describe("PublicContentService", () => {
   it("applies the opaque cursor to the publication timestamp and identifier", async () => {
     const { prisma, service } = fixture();
     publicContext(prisma);
-    prisma.contentEntry.findMany
+    prisma.publishedContentEntry.findMany
       .mockResolvedValueOnce([entry(), entry(secondEntryId, "2026-09-22T14:00:00.000Z")])
       .mockResolvedValueOnce([]);
     const firstPage = await service.list("main-site", "article", {
@@ -105,12 +104,15 @@ describe("PublicContentService", () => {
       locale: "pt-BR",
     });
 
-    expect(prisma.contentEntry.findMany).toHaveBeenLastCalledWith(
+    expect(prisma.publishedContentEntry.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           OR: [
             { publishedAt: { lt: new Date("2026-09-22T15:00:00.000Z") } },
-            { id: { lt: entryId }, publishedAt: new Date("2026-09-22T15:00:00.000Z") },
+            {
+              contentEntryId: { lt: entryId },
+              publishedAt: new Date("2026-09-22T15:00:00.000Z"),
+            },
           ],
         }),
       }),
@@ -120,19 +122,19 @@ describe("PublicContentService", () => {
   it("returns only a published entry in the resolved site and locale", async () => {
     const { metrics, prisma, service } = fixture();
     publicContext(prisma);
-    prisma.contentEntry.findFirst.mockResolvedValue(entry());
+    prisma.publishedContentEntry.findFirst.mockResolvedValue(entry());
 
     await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toMatchObject({
       data: { title: "Public article" },
       id: entryId,
     });
-    expect(prisma.contentEntry.findFirst).toHaveBeenCalledWith(
+    expect(prisma.publishedContentEntry.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          contentTypeId: "type-1",
-          id: entryId,
+          contentEntryId: entryId,
+          contentTypeKey: "article",
+          localeCode: "pt-BR",
           siteId: "site-1",
-          status: "PUBLISHED",
         }),
       }),
     );
@@ -147,7 +149,7 @@ describe("PublicContentService", () => {
     await expect(service.list("archived-site", "article", { locale: "pt-BR" })).resolves.toBeNull();
 
     publicContext(prisma);
-    prisma.contentEntry.findFirst.mockResolvedValue(null);
+    prisma.publishedContentEntry.findFirst.mockResolvedValue(null);
     await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toBeNull();
     expect(metrics.render()).toContain(
       'nexora_public_content_reads_total{operation="list",outcome="miss"} 1',
