@@ -53,6 +53,11 @@ services:
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://nexora:nexora_dev_password@rabbitmq:5672
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-nexora}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-nexora_dev_password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-nexora-media}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
     ports:
       - "${CORE_API_PORT:-48120}:48120"
     depends_on:
@@ -63,6 +68,8 @@ services:
       rabbitmq:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      clamav:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:48120/health >/dev/null"]

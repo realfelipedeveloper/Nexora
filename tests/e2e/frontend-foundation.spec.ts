@@ -167,12 +167,15 @@ test.describe("frontend foundation", () => {
     const overview = page.getByRole("button", { name: "Overview" });
     const contentTypes = page.getByRole("button", { name: "Content types" });
     const entries = page.getByRole("button", { name: "Entries" });
+    const media = page.getByRole("button", { name: "Media" });
     const settings = page.getByRole("button", { name: "Settings" });
     await overview.focus();
     await page.keyboard.press("Tab");
     await expect(contentTypes).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(entries).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(media).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(settings).toBeFocused();
 
@@ -497,6 +500,78 @@ test.describe("frontend foundation", () => {
       scrollWidth: document.documentElement.scrollWidth,
     }));
     expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms uploads a scanned asset into the site media library", async ({ page }) => {
+    let uploadHeaders: Record<string, string> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: ["content.read", "media.read", "media.write"],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({ json: { locales: [], members: [] }, status: 200 });
+    });
+    const asset = {
+      altText: null,
+      checksumSha256: "a".repeat(64),
+      contentUrl:
+        "/api/core/public/sites/docs/assets/00000000-0000-4000-8000-000000000001/content?v=1",
+      createdAt: "2026-09-26T12:00:00.000Z",
+      displayName: "report.pdf",
+      extension: "pdf",
+      id: "00000000-0000-4000-8000-000000000001",
+      mimeType: "application/pdf",
+      originalName: "report.pdf",
+      sizeBytes: 512,
+      status: "READY",
+      updatedAt: "2026-09-26T12:00:00.000Z",
+      usageCount: 0,
+      version: 1,
+    };
+    await page.route(/\/api\/core\/sites\/site-1\/assets(?:\?.*)?$/u, async (route) => {
+      if (route.request().method() === "POST") {
+        uploadHeaders = route.request().headers();
+        await route.fulfill({ json: asset, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: { items: [] }, status: 200 });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Media" }).click();
+    await page.getByLabel("Upload media file").setInputFiles({
+      buffer: Buffer.from("%PDF-1.4\n%%EOF"),
+      mimeType: "application/pdf",
+      name: "report.pdf",
+    });
+
+    await expect(page.getByText("Asset uploaded and scanned.")).toBeVisible();
+    await expect(page.getByLabel("Display name")).toHaveValue("report.pdf");
+    expect(uploadHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(uploadHeaders?.["content-type"]).toContain("multipart/form-data; boundary=");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 });

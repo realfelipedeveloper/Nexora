@@ -52,6 +52,10 @@ enum PublicationScheduleStatus {
   FAILED
 }
 
+enum AssetStatus {
+  READY
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -74,6 +78,7 @@ model User {
   editorialComments       ContentEntryComment[]
   editorialReviews        ContentEntryReview[]
   publicationSchedules    PublicationSchedule[]    @relation("PublicationScheduleRequestedBy")
+  uploadedAssets          Asset[]                  @relation("AssetCreatedBy")
 }
 
 model Session {
@@ -99,27 +104,29 @@ model Site {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  locales              Locale[]
-  contentTypes         ContentType[]
-  contentEntries       ContentEntry[]
-  contentSnapshots     ContentEntrySnapshot[]
-  contentAssignments   ContentEntryAssignment[]
-  editorialComments    ContentEntryComment[]
-  editorialReviews     ContentEntryReview[]
-  contentPlacements    ContentPlacement[]
-  menus                Menu[]
-  menuItems            MenuItem[]
-  routingPaths         RoutingPath[]
-  routes               Route[]
-  routeAliases         RouteAlias[]
-  redirects            Redirect[]
-  publishedContent     PublishedContentEntry[]
-  publicationSchedules PublicationSchedule[]
-  domainEvents         DomainEvent[]
-  roleAssignments      SiteRoleAssignment[]
-  sectionAssignments   SectionRoleAssignment[]
-  sections             Section[]
-  settings             SiteSetting[]
+  locales               Locale[]
+  contentTypes          ContentType[]
+  contentEntries        ContentEntry[]
+  contentSnapshots      ContentEntrySnapshot[]
+  contentAssignments    ContentEntryAssignment[]
+  editorialComments     ContentEntryComment[]
+  editorialReviews      ContentEntryReview[]
+  contentPlacements     ContentPlacement[]
+  menus                 Menu[]
+  menuItems             MenuItem[]
+  routingPaths          RoutingPath[]
+  routes                Route[]
+  routeAliases          RouteAlias[]
+  redirects             Redirect[]
+  publishedContent      PublishedContentEntry[]
+  publicationSchedules  PublicationSchedule[]
+  domainEvents          DomainEvent[]
+  roleAssignments       SiteRoleAssignment[]
+  sectionAssignments    SectionRoleAssignment[]
+  sections              Section[]
+  settings              SiteSetting[]
+  assets                Asset[]
+  contentAssetRelations ContentAssetRelation[]
 
   @@index([status])
 }
@@ -202,13 +209,14 @@ model Locale {
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  contentLocales   ContentLocale[]
-  menus            Menu[]
-  routingPaths     RoutingPath[]
-  routes           Route[]
-  routeAliases     RouteAlias[]
-  redirects        Redirect[]
-  publishedContent PublishedContentEntry[]
+  contentLocales        ContentLocale[]
+  menus                 Menu[]
+  routingPaths          RoutingPath[]
+  routes                Route[]
+  routeAliases          RouteAlias[]
+  redirects             Redirect[]
+  publishedContent      PublishedContentEntry[]
+  contentAssetRelations ContentAssetRelation[]
 
   @@unique([siteId, code])
   @@unique([id, siteId])
@@ -469,11 +477,62 @@ model ContentEntry {
   routes                   Route[]
   publishedProjections     PublishedContentEntry[]
   publicationSchedules     PublicationSchedule[]
+  assetRelations           ContentAssetRelation[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
   @@index([siteId, contentTypeId, status, publishedAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, status, updatedAt])
+}
+
+model Asset {
+  id             String      @id @default(uuid())
+  siteId         String
+  createdById    String
+  status         AssetStatus @default(READY)
+  originalName   String      @db.VarChar(255)
+  displayName    String      @db.VarChar(255)
+  altText        String?     @db.VarChar(500)
+  mimeType       String      @db.VarChar(127)
+  extension      String      @db.VarChar(16)
+  sizeBytes      Int
+  checksumSha256 String      @db.Char(64)
+  storageKey     String      @unique @db.VarChar(500)
+  version        Int         @default(1)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  site             Site                   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  createdBy        User                   @relation("AssetCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  contentRelations ContentAssetRelation[]
+
+  @@unique([id, siteId])
+  @@index([siteId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([siteId, mimeType, createdAt(sort: Desc)])
+  @@index([checksumSha256])
+}
+
+model ContentAssetRelation {
+  id             String   @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  assetId        String
+  localeId       String
+  role           String   @db.VarChar(63)
+  position       Int      @default(0)
+  title          String?  @db.VarChar(255)
+  description    String?  @db.VarChar(1000)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  asset        Asset        @relation(fields: [assetId, siteId], references: [id, siteId], onDelete: Restrict)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([contentEntryId, localeId, role, position])
+  @@index([assetId, siteId, createdAt(sort: Desc)])
+  @@index([contentEntryId, siteId, role, position])
 }
 
 model ContentEntryAssignment {

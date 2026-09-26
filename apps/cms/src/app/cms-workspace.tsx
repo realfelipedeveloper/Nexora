@@ -7,6 +7,7 @@ import {
   CircleAlert,
   FileText,
   Files,
+  Images,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -26,6 +27,7 @@ import {
   type SiteAccess,
 } from "./editorial-api";
 import { EntriesView } from "./entries-view";
+import { MediaLibraryView } from "./media-library-view";
 import {
   CmsApiError,
   type CmsSite,
@@ -39,7 +41,7 @@ import {
   saveSiteIdentity,
 } from "./settings-api";
 
-type WorkspaceView = "overview" | "content-types" | "entries" | "settings";
+type WorkspaceView = "overview" | "content-types" | "entries" | "media" | "settings";
 type ResourceState<Value> =
   | { status: "loading" }
   | { setting: StoredSetting<Value> | null; status: "ready" }
@@ -146,7 +148,7 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
   }, [selectedSiteId]);
 
   useEffect(() => {
-    if (!selectedSiteId || (view !== "content-types" && view !== "entries")) {
+    if (!selectedSiteId || (view !== "content-types" && view !== "entries" && view !== "media")) {
       setEditorial({ status: "idle" });
       return;
     }
@@ -252,6 +254,15 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
             Entries
           </button>
           <button
+            aria-current={view === "media" ? "page" : undefined}
+            className={view === "media" ? "nav-item nav-current" : "nav-item"}
+            onClick={() => setView("media")}
+            type="button"
+          >
+            <Images aria-hidden="true" size={18} />
+            Media
+          </button>
+          <button
             aria-current={view === "settings" ? "page" : undefined}
             className={view === "settings" ? "nav-item nav-current" : "nav-item"}
             onClick={() => setView("settings")}
@@ -274,7 +285,9 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
                   ? "Content types"
                   : view === "entries"
                     ? "Entries"
-                    : "Settings"}
+                    : view === "media"
+                      ? "Media"
+                      : "Settings"}
             </h1>
           </div>
           <div className="header-actions">
@@ -342,7 +355,7 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
           </section>
         ) : null}
 
-        {view === "content-types" || view === "entries" ? (
+        {view === "content-types" || view === "entries" || view === "media" ? (
           !selectedSiteId ? (
             <p className="empty-state editorial-empty">
               Select an available site to manage content.
@@ -363,11 +376,20 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
               key={selectedSiteId}
               siteId={selectedSiteId}
             />
-          ) : (
+          ) : view === "entries" ? (
             <EntriesView
               canPublish={editorial.access.permissionKeys.includes("content.publish")}
+              canReadMedia={editorial.access.permissionKeys.includes("media.read")}
               canWrite={editorial.access.permissionKeys.includes("content.write")}
+              canWriteMedia={editorial.access.permissionKeys.includes("media.write")}
               context={editorial.context}
+              csrfToken={session.csrfToken}
+              key={selectedSiteId}
+              siteId={selectedSiteId}
+            />
+          ) : (
+            <MediaLibraryView
+              canWrite={editorial.access.permissionKeys.includes("media.write")}
               csrfToken={session.csrfToken}
               key={selectedSiteId}
               siteId={selectedSiteId}
