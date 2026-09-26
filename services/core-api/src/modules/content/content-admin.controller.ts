@@ -47,6 +47,7 @@ import {
   InvalidContentPageError,
 } from "./content-admin.service.js";
 import { ContentDataInvalidError, ContentDataTooLargeError } from "./content-field-validator.js";
+import { InvalidAssetReferenceError } from "./content-asset-relation.service.js";
 
 type HeaderResponse = { setHeader: (name: string, value: string) => void };
 const maximumDatabaseInteger = 2_147_483_647;
@@ -93,7 +94,8 @@ function mapContentError(error: unknown): never {
   if (
     error instanceof InvalidContentInputError ||
     error instanceof InvalidContentPageError ||
-    error instanceof ContentDataInvalidError
+    error instanceof ContentDataInvalidError ||
+    error instanceof InvalidAssetReferenceError
   ) {
     throw new BadRequestException(error.message);
   }

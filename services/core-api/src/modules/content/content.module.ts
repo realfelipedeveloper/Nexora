@@ -26,6 +26,11 @@ import {
 import { NavigationRoutingService } from "./navigation-routing.service.js";
 import { PublicationSchedulesController } from "./publication-scheduler.controller.js";
 import { PublicationSchedulerService } from "./publication-scheduler.service.js";
+import { ContentAssetRelationService } from "./content-asset-relation.service.js";
+import { MALWARE_SCANNER, ClamAvScanner } from "./malware-scanner.js";
+import { MediaController, PublicMediaController } from "./media.controller.js";
+import { MediaService } from "./media.service.js";
+import { MEDIA_STORAGE, S3MediaStorage } from "./media-storage.js";
 
 @Module({
   controllers: [
@@ -42,6 +47,8 @@ import { PublicationSchedulerService } from "./publication-scheduler.service.js"
     RoutesController,
     SectionPlacementsController,
     SectionsController,
+    MediaController,
+    PublicMediaController,
   ],
   exports: [
     ContentAdminService,
@@ -53,6 +60,8 @@ import { PublicationSchedulerService } from "./publication-scheduler.service.js"
     NavigationRoutingService,
     PublicationSchedulerService,
     SectionPlacementService,
+    ContentAssetRelationService,
+    MediaService,
   ],
   imports: [DatabaseModule, IdentityModule],
   providers: [
@@ -65,6 +74,10 @@ import { PublicationSchedulerService } from "./publication-scheduler.service.js"
     NavigationRoutingService,
     PublicationSchedulerService,
     SectionPlacementService,
+    ContentAssetRelationService,
+    MediaService,
+    { provide: MEDIA_STORAGE, useClass: S3MediaStorage },
+    { provide: MALWARE_SCANNER, useClass: ClamAvScanner },
   ],
 })
 export class ContentModule {}

@@ -17,6 +17,7 @@ import {
 import { InjectPrismaClient } from "../../database/database.module.js";
 import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
+import { ContentAssetRelationService } from "./content-asset-relation.service.js";
 import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { contentEntryTransitionAuditData } from "./content-transition-audit.js";
@@ -299,6 +300,8 @@ export class ContentAdminService {
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentFieldValidator) private readonly validator: ContentFieldValidator,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
+    @Inject(ContentAssetRelationService)
+    private readonly assetRelations: ContentAssetRelationService,
   ) {}
 
   async getEditorialContext(siteId: string) {
@@ -592,6 +595,13 @@ export class ContentAdminService {
         },
         select: contentEntryDetailSelection,
       });
+      await this.assetRelations.synchronize(
+        transaction,
+        siteId,
+        entry.id,
+        locales,
+        schema.definition,
+      );
       await createContentEntrySnapshot(transaction, actorId, siteId, entry.id);
       await transaction.auditEvent.create({
         data: {
@@ -682,6 +692,13 @@ export class ContentAdminService {
           },
         });
       }
+      await this.assetRelations.synchronize(
+        transaction,
+        siteId,
+        contentEntryId,
+        locales,
+        schema.definition,
+      );
       const entry = await transaction.contentEntry.findUniqueOrThrow({
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },

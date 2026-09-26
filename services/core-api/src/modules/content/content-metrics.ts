@@ -39,6 +39,7 @@ type PublicationOperation =
   | "scheduled_published"
   | "scheduled_unpublished"
   | "unpublished";
+type MediaOperation = "deleted" | "downloaded" | "rejected" | "uploaded" | "updated";
 
 @Injectable()
 export class ContentMetrics {
@@ -52,6 +53,7 @@ export class ContentMetrics {
   private readonly navigationMutations = new Map<NavigationMutation, number>();
   private readonly routingResolutions = new Map<RoutingResolution, number>();
   private readonly publicationOperations = new Map<PublicationOperation, number>();
+  private readonly mediaOperations = new Map<MediaOperation, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -88,6 +90,10 @@ export class ContentMetrics {
 
   recordPublicationOperation(operation: PublicationOperation) {
     this.publicationOperations.set(operation, (this.publicationOperations.get(operation) ?? 0) + 1);
+  }
+
+  recordMediaOperation(operation: MediaOperation) {
+    this.mediaOperations.set(operation, (this.mediaOperations.get(operation) ?? 0) + 1);
   }
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
@@ -150,6 +156,10 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_publication_operations_total counter");
     for (const [operation, count] of [...this.publicationOperations.entries()].sort()) {
       lines.push(`nexora_publication_operations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_media_operations_total counter");
+    for (const [operation, count] of [...this.mediaOperations.entries()].sort()) {
+      lines.push(`nexora_media_operations_total{operation="${operation}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {

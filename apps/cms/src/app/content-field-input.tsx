@@ -2,11 +2,16 @@
 
 import type { FieldDefinition } from "./editorial-api";
 import { type ReactNode, useEffect, useState } from "react";
+import { MediaFieldPicker } from "./media-picker";
 
 type Props = {
+  canReadMedia: boolean;
+  canWriteMedia: boolean;
+  csrfToken: string;
   disabled: boolean;
   field: FieldDefinition;
   onChange: (value: unknown) => void;
+  siteId: string;
   value: unknown;
 };
 
@@ -28,7 +33,16 @@ function datetimeLocalValue(value: unknown) {
   return local.toISOString().slice(0, 16);
 }
 
-export function ContentFieldInput({ disabled, field, onChange, value }: Props) {
+export function ContentFieldInput({
+  canReadMedia,
+  canWriteMedia,
+  csrfToken,
+  disabled,
+  field,
+  onChange,
+  siteId,
+  value,
+}: Props) {
   const id = `entry-field-${field.key}`;
   const label = (
     <>
@@ -160,7 +174,28 @@ export function ContentFieldInput({ disabled, field, onChange, value }: Props) {
     );
   }
 
-  if (["gallery", "json", "media", "relation", "taxonomy"].includes(field.fieldType)) {
+  if (field.fieldType === "media" || field.fieldType === "gallery") {
+    return (
+      <fieldset className="media-field wide-field">
+        <legend>{label}</legend>
+        {canReadMedia ? (
+          <MediaFieldPicker
+            canUpload={canWriteMedia}
+            csrfToken={csrfToken}
+            disabled={disabled}
+            multiple={field.fieldType === "gallery"}
+            onChange={onChange}
+            siteId={siteId}
+            value={value}
+          />
+        ) : (
+          <p className="read-only-notice">Media access is not available for this role.</p>
+        )}
+      </fieldset>
+    );
+  }
+
+  if (["json", "relation", "taxonomy"].includes(field.fieldType)) {
     return (
       <JsonField
         disabled={disabled}
@@ -210,7 +245,10 @@ function JsonField({
   label,
   onChange,
   value,
-}: Props & { id: string; label: ReactNode }) {
+}: Pick<Props, "disabled" | "field" | "onChange" | "value"> & {
+  id: string;
+  label: ReactNode;
+}) {
   const serialized = value === undefined ? "" : JSON.stringify(value, null, 2);
   const [draft, setDraft] = useState(serialized);
   useEffect(() => setDraft(serialized), [serialized]);

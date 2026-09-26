@@ -57,7 +57,9 @@ import {
 
 type Props = {
   canPublish: boolean;
+  canReadMedia: boolean;
   canWrite: boolean;
+  canWriteMedia: boolean;
   context: EditorialContext;
   csrfToken: string;
   siteId: string;
@@ -84,7 +86,15 @@ function formatDate(value: string) {
   );
 }
 
-export function EntriesView({ canPublish, canWrite, context, csrfToken, siteId }: Props) {
+export function EntriesView({
+  canPublish,
+  canReadMedia,
+  canWrite,
+  canWriteMedia,
+  context,
+  csrfToken,
+  siteId,
+}: Props) {
   const [types, setTypes] = useState<ContentTypeSummary[] | null>(null);
   const [entries, setEntries] = useState<ContentEntrySummary[] | null>(null);
   const [filter, setFilter] = useState("");
@@ -182,7 +192,9 @@ export function EntriesView({ canPublish, canWrite, context, csrfToken, siteId }
           {selectedId ? (
             <EntryEditor
               canPublish={canPublish}
+              canReadMedia={canReadMedia}
               canWrite={canWrite}
+              canWriteMedia={canWriteMedia}
               context={context}
               csrfToken={csrfToken}
               entryId={selectedId}
@@ -206,7 +218,9 @@ export function EntriesView({ canPublish, canWrite, context, csrfToken, siteId }
 
 function EntryEditor({
   canPublish,
+  canReadMedia,
   canWrite,
+  canWriteMedia,
   context,
   csrfToken,
   entryId,
@@ -471,10 +485,14 @@ function EntryEditor({
                 <div className="entry-fields">
                   {editor.type.fields.map((field) => (
                     <ContentFieldInput
+                      canReadMedia={canReadMedia}
+                      canWriteMedia={canWriteMedia}
+                      csrfToken={csrfToken}
                       disabled={!editable}
                       field={field}
                       key={field.key}
                       onChange={(value) => updateValue(field.key, value)}
+                      siteId={siteId}
                       value={active.data[field.key]}
                     />
                   ))}

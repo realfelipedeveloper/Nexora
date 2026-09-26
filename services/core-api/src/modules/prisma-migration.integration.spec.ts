@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { platform } from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
 } from "./content/content-admin.service.js";
 import { ContentCollaborationController } from "./content/content-collaboration.controller.js";
 import { ContentCollaborationService } from "./content/content-collaboration.service.js";
+import { ContentAssetRelationService } from "./content/content-asset-relation.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
 import {
@@ -228,6 +230,8 @@ describe("PostgreSQL migrations and integration", () => {
     expect(tableList.output.split(/\s+/).filter(Boolean)).toEqual(
       expect.arrayContaining([
         "AuditEvent",
+        "Asset",
+        "ContentAssetRelation",
         "ContentEntry",
         "ContentEntrySnapshot",
         "ContentLocale",
@@ -1054,6 +1058,7 @@ describe("PostgreSQL migrations and integration", () => {
       providers: [
         ContentAdminService,
         ContentCollaborationService,
+        ContentAssetRelationService,
         ContentFieldValidator,
         ContentMetrics,
         ContentVersioningService,
@@ -2568,7 +2573,12 @@ describe("PostgreSQL migrations and integration", () => {
       siteId: site.id,
     } satisfies SiteAccess;
     const metrics = new ContentMetrics();
-    const service = new ContentAdminService(prisma, new ContentFieldValidator(), metrics);
+    const service = new ContentAdminService(
+      prisma,
+      new ContentFieldValidator(),
+      metrics,
+      new ContentAssetRelationService(),
+    );
     const createEntry = () =>
       prisma.contentEntry.create({
         data: {
@@ -2672,6 +2682,138 @@ describe("PostgreSQL migrations and integration", () => {
       ]);
       expect(metrics.render()).toContain("nexora_content_precondition_failures_total 1");
     } finally {
+      await prisma.$disconnect();
+    }
+  });
+
+  it("enforces site-isolated asset relations and blocks deletion while in use", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const suffix = randomUUID();
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Media editor",
+        email: `media-${suffix}@example.com`,
+        normalizedEmail: `media-${suffix}@example.com`,
+        passwordHash: "not-used-in-this-test",
+      },
+    });
+    const firstSite = await prisma.site.create({
+      data: { key: `media-a-${suffix}`, name: "Media A" },
+    });
+    const secondSite = await prisma.site.create({
+      data: { key: `media-b-${suffix}`, name: "Media B" },
+    });
+
+    try {
+      const locale = await prisma.locale.create({
+        data: { code: "en", isDefault: true, siteId: firstSite.id },
+      });
+      const contentType = await prisma.contentType.create({
+        data: {
+          displayName: "Article",
+          fields: { create: { config: {}, fieldType: "media", key: "cover", label: "Cover" } },
+          key: "article",
+          schemaVersions: {
+            create: {
+              definition: {
+                displayName: "Article",
+                fields: [
+                  {
+                    config: {},
+                    fieldType: "media",
+                    key: "cover",
+                    label: "Cover",
+                    position: 0,
+                    required: false,
+                  },
+                ],
+                key: "article",
+                version: 1,
+              },
+              version: 1,
+            },
+          },
+          siteId: firstSite.id,
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: {
+          contentLocales: { create: { data: {}, localeId: locale.id, schemaVersion: 1 } },
+          contentTypeId: contentType.id,
+          schemaVersion: 1,
+          siteId: firstSite.id,
+        },
+      });
+      const asset = await prisma.asset.create({
+        data: {
+          checksumSha256: "a".repeat(64),
+          createdById: user.id,
+          displayName: "cover.png",
+          extension: "png",
+          mimeType: "image/png",
+          originalName: "cover.png",
+          siteId: firstSite.id,
+          sizeBytes: 128,
+          storageKey: `${firstSite.id}/cover.png`,
+        },
+      });
+      const foreignAsset = await prisma.asset.create({
+        data: {
+          checksumSha256: "b".repeat(64),
+          createdById: user.id,
+          displayName: "foreign.png",
+          extension: "png",
+          mimeType: "image/png",
+          originalName: "foreign.png",
+          siteId: secondSite.id,
+          sizeBytes: 128,
+          storageKey: `${secondSite.id}/foreign.png`,
+        },
+      });
+
+      await prisma.contentAssetRelation.create({
+        data: {
+          assetId: asset.id,
+          contentEntryId: entry.id,
+          localeId: locale.id,
+          role: "cover",
+          siteId: firstSite.id,
+        },
+      });
+      await expect(prisma.asset.delete({ where: { id: asset.id } })).rejects.toMatchObject({
+        code: "P2003",
+      });
+      await expect(
+        prisma.contentAssetRelation.create({
+          data: {
+            assetId: foreignAsset.id,
+            contentEntryId: entry.id,
+            localeId: locale.id,
+            position: 1,
+            role: "cover",
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+      await expect(
+        prisma.asset.create({
+          data: {
+            checksumSha256: "c".repeat(64),
+            createdById: user.id,
+            displayName: "empty.pdf",
+            extension: "pdf",
+            mimeType: "application/pdf",
+            originalName: "empty.pdf",
+            siteId: firstSite.id,
+            sizeBytes: 0,
+            storageKey: `${firstSite.id}/empty.pdf`,
+          },
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      await prisma.contentEntry.deleteMany({ where: { siteId: firstSite.id } });
+      await prisma.site.deleteMany({ where: { id: { in: [firstSite.id, secondSite.id] } } });
+      await prisma.user.delete({ where: { id: user.id } });
       await prisma.$disconnect();
     }
   });

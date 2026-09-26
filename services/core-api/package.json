@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1141.0",
     "@nexora/config": "workspace:*",
     "@nexora/schemas": "workspace:*",
     "@prisma/adapter-pg": "7.10.0",
     "argon2": "0.45.1",
+    "busboy": "^1.6.0",
+    "express": "5.2.1",
+    "file-type": "^22.1.1",
     "pg": "8.23.0"
   },
   "scripts": {
@@ -23,6 +27,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/express": "5.0.6",
     "@types/pg": "8.23.1"
   }
 }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ContentAdminService } from "./content-admin.service.js";
 import type { ContentFieldValidator } from "./content-field-validator.js";
 import type { ContentMetrics } from "./content-metrics.js";
+import { ContentAssetRelationService } from "./content-asset-relation.service.js";
 
 describe("ContentAdminService editorial context", () => {
   it("returns default-first locales and active editorial members within the site", async () => {
@@ -16,6 +17,7 @@ describe("ContentAdminService editorial context", () => {
       prisma,
       {} as ContentFieldValidator,
       {} as ContentMetrics,
+      new ContentAssetRelationService(),
     );
 
     await expect(service.getEditorialContext("site-1")).resolves.toEqual({ locales, members });
