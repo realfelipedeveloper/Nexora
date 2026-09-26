@@ -3,6 +3,7 @@
 import type { FieldDefinition } from "./editorial-api";
 import { type ReactNode, useEffect, useState } from "react";
 import { MediaFieldPicker } from "./media-picker";
+import { RichTextEditor } from "./rich-text-editor";
 
 type Props = {
   canReadMedia: boolean;
@@ -158,7 +159,26 @@ export function ContentFieldInput({
     );
   }
 
-  if (field.fieldType === "textarea" || field.fieldType === "richText") {
+  if (field.fieldType === "richText") {
+    return (
+      <fieldset className="rich-text-field wide-field">
+        <legend>{label}</legend>
+        <RichTextEditor
+          canReadMedia={canReadMedia}
+          canWriteMedia={canWriteMedia}
+          csrfToken={csrfToken}
+          disabled={disabled}
+          label={field.label}
+          onChange={onChange}
+          required={field.required}
+          siteId={siteId}
+          value={value}
+        />
+      </fieldset>
+    );
+  }
+
+  if (field.fieldType === "textarea") {
     return (
       <label className="wide-field" htmlFor={id}>
         {label}
@@ -167,7 +187,7 @@ export function ContentFieldInput({
           id={id}
           onChange={(event) => onChange(event.target.value)}
           required={field.required}
-          rows={field.fieldType === "richText" ? 10 : 5}
+          rows={5}
           value={textValue(value)}
         />
       </label>
