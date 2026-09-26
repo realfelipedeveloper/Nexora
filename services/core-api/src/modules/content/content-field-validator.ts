@@ -4,6 +4,12 @@ import {
   fieldConfigurationSchemas,
   type FieldDefinition,
 } from "@nexora/schemas";
+import {
+  normalizeRichTextDocument,
+  richTextAssetIds,
+  richTextPlainText,
+  type RichTextDocument,
+} from "@nexora/rich-text";
 
 export const maximumContentBytes = 1_048_576;
 const maximumJsonDepth = 32;
@@ -207,8 +213,9 @@ function validateFieldValue(
   switch (field.fieldType) {
     case "text":
     case "textarea":
-    case "richText":
       return validateString(field, value, configuration);
+    case "richText":
+      return issue(field, "invalid_type");
     case "integer":
       return validateNumber(field, value, configuration, true);
     case "decimal":
@@ -273,6 +280,32 @@ function validateFieldValue(
   }
 }
 
+function validateRichText(
+  field: FieldDefinition,
+  value: unknown,
+): { document?: RichTextDocument; issue?: ContentValidationIssue } {
+  try {
+    const document = normalizeRichTextDocument(value);
+    const configuration = fieldConfigurationSchemas.richText.parse(field.config);
+    const length = richTextPlainText(document).length;
+    if (length < configuration.minLength || length > configuration.maxLength) {
+      return { issue: issue(field, "invalid_value") };
+    }
+    if (
+      field.required &&
+      richTextPlainText(document).trim() === "" &&
+      richTextAssetIds(document).length === 0
+    ) {
+      return {
+        issue: { code: "required", fieldKey: field.key, message: "Field is required." },
+      };
+    }
+    return { document };
+  } catch {
+    return { issue: issue(field, "invalid_format") };
+  }
+}
+
 @Injectable()
 export class ContentFieldValidator {
   validate(definition: unknown, data: unknown): Readonly<JsonRecord> {
@@ -296,6 +329,7 @@ export class ContentFieldValidator {
     }
 
     const issues: ContentValidationIssue[] = [];
+    const normalizedData: JsonRecord = { ...data };
     const fieldKeys = new Set(parsedDefinition.data.fields.map((field) => field.key));
     if (Object.keys(data).some((key) => !fieldKeys.has(key))) {
       issues.push({
@@ -310,6 +344,15 @@ export class ContentFieldValidator {
       if (!present || value === null) {
         if (field.required) {
           issues.push({ code: "required", fieldKey: field.key, message: "Field is required." });
+        }
+        continue;
+      }
+      if (field.fieldType === "richText") {
+        const result = validateRichText(field, value);
+        if (result.issue) {
+          issues.push(result.issue);
+        } else if (result.document) {
+          normalizedData[field.key] = result.document;
         }
         continue;
       }
@@ -332,6 +375,6 @@ export class ContentFieldValidator {
       throw new ContentDataInvalidError(issues);
     }
 
-    return Object.freeze({ ...data });
+    return Object.freeze(normalizedData);
   }
 }

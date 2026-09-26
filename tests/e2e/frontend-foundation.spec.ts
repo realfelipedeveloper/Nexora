@@ -356,6 +356,7 @@ test.describe("frontend foundation", () => {
   }) => {
     let typeWriteHeaders: Record<string, string> | undefined;
     let statusWriteHeaders: Record<string, string> | undefined;
+    let entryWriteBody: Record<string, unknown> | undefined;
     await page.route("**/api/core/auth/session", async (route) => {
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
@@ -375,7 +376,13 @@ test.describe("frontend foundation", () => {
       await route.fulfill({
         json: {
           isSystemAdmin: true,
-          permissionKeys: ["content.read", "content.write", "content.publish"],
+          permissionKeys: [
+            "content.read",
+            "content.write",
+            "content.publish",
+            "media.read",
+            "media.write",
+          ],
           roleKeys: [],
           siteId: "site-1",
         },
@@ -410,6 +417,15 @@ test.describe("frontend foundation", () => {
           position: 0,
           required: true,
         },
+        {
+          config: { maxLength: 500000, minLength: 0 },
+          fieldType: "richText",
+          id: "field-2",
+          key: "body",
+          label: "Body",
+          position: 1,
+          required: true,
+        },
       ],
     };
     await page.route(
@@ -435,7 +451,7 @@ test.describe("frontend foundation", () => {
     const entryDetail = {
       contentLocales: [
         {
-          data: { title: "Release" },
+          data: { body: "Legacy body", title: "Release" },
           locale: { code: "en" },
           localeId: "locale-1",
           revision: 1,
@@ -452,6 +468,32 @@ test.describe("frontend foundation", () => {
       status: "DRAFT",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
+    await page.route(/\/api\/core\/sites\/site-1\/assets(?:\?.*)?$/u, async (route) => {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              altText: "Inline image",
+              checksumSha256: "a".repeat(64),
+              contentUrl:
+                "/api/core/sites/site-1/assets/00000000-0000-4000-8000-000000000001/content?v=1",
+              createdAt: "2026-09-26T12:00:00.000Z",
+              displayName: "inline.png",
+              extension: "png",
+              id: "00000000-0000-4000-8000-000000000001",
+              mimeType: "image/png",
+              originalName: "inline.png",
+              sizeBytes: 512,
+              status: "READY",
+              updatedAt: "2026-09-26T12:00:00.000Z",
+              usageCount: 0,
+              version: 1,
+            },
+          ],
+        },
+        status: 200,
+      });
+    });
     await page.route(
       /\/api\/core\/sites\/site-1\/content-entries(?:\/.*)?(?:\?.*)?$/u,
       async (route) => {
@@ -460,12 +502,28 @@ test.describe("frontend foundation", () => {
           statusWriteHeaders = route.request().headers();
           await route.fulfill({
             headers: { ETag: '"2"' },
-            json: { ...entryDetail, revision: 2, status: "IN_REVIEW" },
+            json: { ...entryDetail, revision: 3, status: "IN_REVIEW" },
             status: 200,
           });
           return;
         }
         if (pathname.endsWith("/entry-1")) {
+          if (route.request().method() === "PUT") {
+            entryWriteBody = route.request().postDataJSON() as Record<string, unknown>;
+            const locales = entryWriteBody.locales as Array<{ data: Record<string, unknown> }>;
+            await route.fulfill({
+              headers: { ETag: '"2"' },
+              json: {
+                ...entryDetail,
+                contentLocales: [
+                  { ...entryDetail.contentLocales[0], data: locales[0]?.data, revision: 2 },
+                ],
+                revision: 2,
+              },
+              status: 200,
+            });
+            return;
+          }
           await route.fulfill({ headers: { ETag: '"1"' }, json: entryDetail, status: 200 });
           return;
         }
@@ -486,14 +544,53 @@ test.describe("frontend foundation", () => {
 
     await page.getByRole("button", { name: "Entries" }).click();
     await page.getByRole("button", { name: /Article/ }).click();
+    const richText = page.getByRole("textbox", { name: "Body rich text" });
+    await expect(richText).toContainText("Legacy body");
+    await richText.fill("Structured body");
+    await richText.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.getByRole("button", { name: "Bold" }).click();
+    await richText.press("End");
+    await page.getByRole("button", { name: "Insert media" }).click();
+    await page.getByRole("button", { name: /inline.png/ }).click();
+    await page.getByRole("button", { name: "Use selected" }).click();
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByText("Entry saved.")).toBeVisible();
     await page.getByRole("tab", { name: "Workflow" }).click();
     await page.getByRole("button", { name: "Submit for review" }).click();
     await expect(page.getByText("Submitted for review.")).toBeVisible();
 
     expect(typeWriteHeaders?.["if-match"]).toBe('"2"');
     expect(typeWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
-    expect(statusWriteHeaders?.["if-match"]).toBe('"1"');
+    expect(statusWriteHeaders?.["if-match"]).toBe('"2"');
     expect(statusWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    const writtenLocales = entryWriteBody?.locales as Array<{
+      data: { body: { content: unknown[]; schemaVersion: number; type: string } };
+    }>;
+    const writtenBody = writtenLocales[0]?.data.body;
+    expect(writtenBody).toMatchObject({ schemaVersion: 1, type: "doc" });
+    expect(writtenBody?.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              marks: expect.arrayContaining([expect.objectContaining({ type: "bold" })]),
+              text: "Structured body",
+              type: "text",
+            }),
+          ]),
+          type: "paragraph",
+        }),
+        expect.objectContaining({
+          attrs: expect.objectContaining({
+            altText: "Inline image",
+            assetId: "00000000-0000-4000-8000-000000000001",
+            displayName: "inline.png",
+            kind: "image",
+          }),
+          type: "asset",
+        }),
+      ]),
+    );
     await page.setViewportSize({ height: 844, width: 390 });
     const viewport = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,

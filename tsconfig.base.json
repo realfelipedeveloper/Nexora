@@ -22,6 +22,7 @@
       "@nexora/config": ["packages/config/src/index.ts"],
       "@nexora/contracts": ["packages/contracts/src/index.ts"],
       "@nexora/design-system": ["packages/design-system/src/index.ts"],
+      "@nexora/rich-text": ["packages/rich-text/src/index.ts"],
       "@nexora/schemas": ["packages/schemas/src/index.ts"],
       "@nexora/testing": ["packages/testing/src/index.ts"]
     },

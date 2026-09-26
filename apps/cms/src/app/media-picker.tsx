@@ -8,7 +8,9 @@ type Props = {
   canUpload: boolean;
   csrfToken: string;
   disabled: boolean;
+  insertMode?: boolean;
   multiple: boolean;
+  onAssetsSelected?: (assets: MediaAsset[]) => void;
   onChange: (value: string | string[] | undefined) => void;
   siteId: string;
   value: unknown;
@@ -29,7 +31,9 @@ export function MediaFieldPicker({
   canUpload,
   csrfToken,
   disabled,
+  insertMode = false,
   multiple,
+  onAssetsSelected,
   onChange,
   siteId,
   value,
@@ -81,17 +85,19 @@ export function MediaFieldPicker({
   const selectedAssets = assets.filter((asset) => current.includes(asset.id));
   return (
     <div className="media-field-picker wide-field">
-      <div className="selected-media-strip">
-        {selectedAssets.map((asset) => (
-          <div className="selected-media-item" key={asset.id}>
-            <AssetPreview asset={asset} />
-            <span>{asset.displayName}</span>
-          </div>
-        ))}
-        {current.length > 0 && selectedAssets.length === 0 ? (
-          <span className="media-reference-count">{current.length} selected asset(s)</span>
-        ) : null}
-      </div>
+      {!insertMode ? (
+        <div className="selected-media-strip">
+          {selectedAssets.map((asset) => (
+            <div className="selected-media-item" key={asset.id}>
+              <AssetPreview asset={asset} />
+              <span>{asset.displayName}</span>
+            </div>
+          ))}
+          {current.length > 0 && selectedAssets.length === 0 ? (
+            <span className="media-reference-count">{current.length} selected asset(s)</span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="media-field-actions">
         <button
           className="button button-secondary"
@@ -99,9 +105,10 @@ export function MediaFieldPicker({
           onClick={() => setOpen(true)}
           type="button"
         >
-          <ImageIcon aria-hidden="true" /> {current.length ? "Change media" : "Choose media"}
+          <ImageIcon aria-hidden="true" />
+          {insertMode ? "Insert media" : current.length ? "Change media" : "Choose media"}
         </button>
-        {current.length ? (
+        {!insertMode && current.length ? (
           <button
             aria-label="Clear media"
             className="icon-button"
@@ -199,8 +206,10 @@ export function MediaFieldPicker({
                 className="button button-primary"
                 disabled={multiple ? false : selected.length !== 1}
                 onClick={() => {
-                  onChange(multiple ? selected : selected[0]);
+                  const chosenAssets = assets.filter((asset) => selected.includes(asset.id));
                   setOpen(false);
+                  onAssetsSelected?.(chosenAssets);
+                  onChange(multiple ? selected : selected[0]);
                 }}
                 type="button"
               >

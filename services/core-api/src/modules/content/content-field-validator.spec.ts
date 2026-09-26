@@ -6,6 +6,7 @@ import {
   ContentSchemaInvalidError,
   maximumContentBytes,
 } from "./content-field-validator.js";
+import { richTextPlainText, type RichTextDocument } from "@nexora/rich-text";
 
 const firstUuid = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
 const secondUuid = "a11f740b-f15f-4279-8ca2-3877a4cae775";
@@ -66,13 +67,18 @@ describe("ContentFieldValidator", () => {
       title: "Nexora",
     };
 
-    expect(validator.validate(definition, data)).toEqual(data);
+    const validated = validator.validate(definition, data);
+    expect(validated).toMatchObject({
+      ...data,
+      body: expect.objectContaining({ schemaVersion: 1 }),
+    });
+    expect(richTextPlainText(validated.body as RichTextDocument)).toBe(data.body);
   });
 
   it.each([
     ["text", {}, 42],
     ["textarea", {}, []],
-    ["richText", {}, {}],
+    ["richText", {}, { content: [{ type: "script" }], schemaVersion: 1, type: "doc" }],
     ["integer", {}, 1.5],
     ["decimal", {}, "1.5"],
     ["boolean", {}, "true"],
@@ -194,6 +200,52 @@ describe("ContentFieldValidator", () => {
     });
     expect(() =>
       validator.validate(relationDefinition, { related: [firstUuid, firstUuid] }),
+    ).toThrow(ContentDataInvalidError);
+  });
+
+  it("normalizes structured rich text and rejects unsafe links", () => {
+    const richTextDefinition = {
+      displayName: "Article",
+      fields: [
+        {
+          config: { maxLength: 100, minLength: 1 },
+          fieldType: "richText",
+          key: "body",
+          label: "Body",
+          required: true,
+        },
+      ],
+      key: "article",
+      version: 1,
+    };
+    const safe = validator.validate(richTextDefinition, {
+      body: {
+        content: [{ content: [{ text: "Safe", type: "text" }], type: "paragraph" }],
+        schemaVersion: 1,
+        type: "doc",
+      },
+    });
+    expect(safe.body).toMatchObject({ schemaVersion: 1 });
+
+    expect(() =>
+      validator.validate(richTextDefinition, {
+        body: {
+          content: [
+            {
+              content: [
+                {
+                  marks: [{ attrs: { href: "javascript:alert(1)" }, type: "link" }],
+                  text: "Unsafe",
+                  type: "text",
+                },
+              ],
+              type: "paragraph",
+            },
+          ],
+          schemaVersion: 1,
+          type: "doc",
+        },
+      }),
     ).toThrow(ContentDataInvalidError);
   });
 });

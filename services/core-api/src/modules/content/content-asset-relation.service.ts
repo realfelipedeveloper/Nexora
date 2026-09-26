@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { normalizeRichTextDocument, richTextAssetIds } from "@nexora/rich-text";
 import { contentTypeSchemaDefinitionSchema } from "@nexora/schemas";
 import type { Prisma } from "@prisma/client";
 
@@ -24,15 +25,23 @@ export class ContentAssetRelationService {
     definition: unknown,
   ) {
     const schema = contentTypeSchemaDefinitionSchema.parse(definition);
-    const assetFields = schema.fields.filter(
-      (field) => field.fieldType === "media" || field.fieldType === "gallery",
+    const assetFields = schema.fields.filter((field) =>
+      ["gallery", "media", "richText"].includes(field.fieldType),
     );
     const relations = locales.flatMap((locale) => {
       const data = record(locale.data);
       return assetFields.flatMap((field) => {
         const value = data[field.key];
         const assetIds =
-          field.fieldType === "gallery" ? (Array.isArray(value) ? value : []) : [value];
+          field.fieldType === "gallery"
+            ? Array.isArray(value)
+              ? value
+              : []
+            : field.fieldType === "richText"
+              ? value === undefined || value === null
+                ? []
+                : richTextAssetIds(normalizeRichTextDocument(value))
+              : [value];
         return assetIds
           .filter((assetId): assetId is string => typeof assetId === "string")
           .map((assetId, position) => ({

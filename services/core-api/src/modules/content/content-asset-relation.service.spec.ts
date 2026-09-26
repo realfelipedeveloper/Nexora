@@ -17,6 +17,14 @@ const definition = {
       position: 1,
       required: false,
     },
+    {
+      config: { maxLength: 500000, minLength: 0 },
+      fieldType: "richText",
+      key: "body",
+      label: "Body",
+      position: 2,
+      required: false,
+    },
   ],
   key: "article",
   version: 1,
@@ -35,7 +43,7 @@ function transaction(assetCount: number) {
 
 describe("ContentAssetRelationService", () => {
   it("synchronizes ordered media and gallery references for each locale", async () => {
-    const prisma = transaction(3);
+    const prisma = transaction(4);
     const service = new ContentAssetRelationService();
     await service.synchronize(
       prisma,
@@ -44,6 +52,21 @@ describe("ContentAssetRelationService", () => {
       [
         {
           data: {
+            body: {
+              content: [
+                {
+                  attrs: {
+                    altText: "Inline image",
+                    assetId: "00000000-0000-4000-8000-000000000004",
+                    displayName: "inline.png",
+                    kind: "image",
+                  },
+                  type: "asset",
+                },
+              ],
+              schemaVersion: 1,
+              type: "doc",
+            },
             cover: "00000000-0000-4000-8000-000000000001",
             gallery: [
               "00000000-0000-4000-8000-000000000002",
@@ -67,6 +90,7 @@ describe("ContentAssetRelationService", () => {
       data: expect.arrayContaining([
         expect.objectContaining({ role: "cover", position: 0 }),
         expect.objectContaining({ role: "gallery", position: 1 }),
+        expect.objectContaining({ role: "body", position: 0 }),
       ]),
     });
   });
