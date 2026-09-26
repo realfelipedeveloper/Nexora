@@ -70,6 +70,20 @@ export class ContentVersioningController {
     @Inject(ContentVersioningService) private readonly versioning: ContentVersioningService,
   ) {}
 
+  @Get()
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.read")
+  async list(
+    @Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string,
+    @Param("contentEntryId", new ParseUUIDPipe({ version: "4" })) contentEntryId: string,
+  ) {
+    try {
+      return await this.versioning.listRevisions(siteId, contentEntryId);
+    } catch (error) {
+      mapVersioningError(error);
+    }
+  }
+
   @Get("compare")
   @Header("Cache-Control", "no-store")
   @RequireSitePermissions("content.read")

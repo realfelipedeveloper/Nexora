@@ -13,6 +13,7 @@ import type { SiteScopedRequest } from "../identity/site-authorization.guard.js"
 import {
   ContentEntriesController,
   ContentTypesController,
+  EditorialContextController,
   parseContentPrecondition,
 } from "./content-admin.controller.js";
 import {
@@ -62,6 +63,7 @@ function fixture() {
     deleteContentEntry: vi.fn(),
     deleteContentType: vi.fn(),
     getContentEntry: vi.fn(),
+    getEditorialContext: vi.fn(),
     getContentType: vi.fn(),
     listContentEntries: vi.fn(),
     listContentTypes: vi.fn(),
@@ -71,12 +73,22 @@ function fixture() {
   };
   return {
     entries: new ContentEntriesController(service as unknown as ContentAdminService),
+    context: new EditorialContextController(service as unknown as ContentAdminService),
     service,
     types: new ContentTypesController(service as unknown as ContentAdminService),
   };
 }
 
 describe("content administration controllers", () => {
+  it("loads the site-scoped editorial context", async () => {
+    const { context, service } = fixture();
+    const result = { locales: [], members: [] };
+    service.getEditorialContext.mockResolvedValue(result);
+
+    await expect(context.get("site-1")).resolves.toBe(result);
+    expect(service.getEditorialContext).toHaveBeenCalledWith("site-1");
+  });
+
   it("requires a strong positive integer content precondition", () => {
     expect(parseContentPrecondition('"42"')).toBe(42);
     expect(() => parseContentPrecondition("42")).toThrow(BadRequestException);

@@ -1,7 +1,11 @@
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../../database/database.module.js";
 import { IdentityModule } from "../identity/identity.module.js";
-import { ContentEntriesController, ContentTypesController } from "./content-admin.controller.js";
+import {
+  ContentEntriesController,
+  ContentTypesController,
+  EditorialContextController,
+} from "./content-admin.controller.js";
 import { ContentAdminService } from "./content-admin.service.js";
 import { ContentCollaborationController } from "./content-collaboration.controller.js";
 import { ContentCollaborationService } from "./content-collaboration.service.js";
@@ -28,6 +32,7 @@ import { PublicationSchedulerService } from "./publication-scheduler.service.js"
     ContentCollaborationController,
     ContentEntriesController,
     ContentTypesController,
+    EditorialContextController,
     ContentVersioningController,
     PublicContentController,
     PublicNavigationController,

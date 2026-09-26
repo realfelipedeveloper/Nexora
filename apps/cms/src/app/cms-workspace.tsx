@@ -1,10 +1,12 @@
 "use client";
 
 import {
+  Braces,
   Building2,
   CheckCircle2,
   CircleAlert,
   FileText,
+  Files,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -15,6 +17,15 @@ import {
 import { type FormEvent, useEffect, useState } from "react";
 import { initialFieldTypes } from "@nexora/schemas";
 import type { CmsSession } from "./auth-api";
+import { ContentTypesView } from "./content-types-view";
+import {
+  editorialErrorMessage,
+  getEditorialContext,
+  getSiteAccess,
+  type EditorialContext,
+  type SiteAccess,
+} from "./editorial-api";
+import { EntriesView } from "./entries-view";
 import {
   CmsApiError,
   type CmsSite,
@@ -28,10 +39,15 @@ import {
   saveSiteIdentity,
 } from "./settings-api";
 
-type WorkspaceView = "overview" | "settings";
+type WorkspaceView = "overview" | "content-types" | "entries" | "settings";
 type ResourceState<Value> =
   | { status: "loading" }
   | { setting: StoredSetting<Value> | null; status: "ready" }
+  | { message: string; status: "error" };
+type EditorialState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { access: SiteAccess; context: EditorialContext; status: "ready" }
   | { message: string; status: "error" };
 
 type CmsWorkspaceProps = {
@@ -70,6 +86,8 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
   const [identityForm, setIdentityForm] = useState<SiteIdentity>({ displayName: "" });
   const [saving, setSaving] = useState<"branding" | "identity" | null>(null);
   const [savedMessage, setSavedMessage] = useState("");
+  const [editorial, setEditorial] = useState<EditorialState>({ status: "idle" });
+  const [editorialReload, setEditorialReload] = useState(0);
 
   function loadSites() {
     setSitesError(null);
@@ -126,6 +144,19 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
   useEffect(() => {
     loadSiteIdentity(selectedSiteId);
   }, [selectedSiteId]);
+
+  useEffect(() => {
+    if (!selectedSiteId || (view !== "content-types" && view !== "entries")) {
+      setEditorial({ status: "idle" });
+      return;
+    }
+    setEditorial({ status: "loading" });
+    void Promise.all([getSiteAccess(selectedSiteId), getEditorialContext(selectedSiteId)])
+      .then(([access, context]) => setEditorial({ access, context, status: "ready" }))
+      .catch((error: unknown) =>
+        setEditorial({ message: editorialErrorMessage(error), status: "error" }),
+      );
+  }, [editorialReload, selectedSiteId, view]);
 
   async function saveBranding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -203,6 +234,24 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
             Overview
           </button>
           <button
+            aria-current={view === "content-types" ? "page" : undefined}
+            className={view === "content-types" ? "nav-item nav-current" : "nav-item"}
+            onClick={() => setView("content-types")}
+            type="button"
+          >
+            <Braces aria-hidden="true" size={18} />
+            Content types
+          </button>
+          <button
+            aria-current={view === "entries" ? "page" : undefined}
+            className={view === "entries" ? "nav-item nav-current" : "nav-item"}
+            onClick={() => setView("entries")}
+            type="button"
+          >
+            <Files aria-hidden="true" size={18} />
+            Entries
+          </button>
+          <button
             aria-current={view === "settings" ? "page" : undefined}
             className={view === "settings" ? "nav-item nav-current" : "nav-item"}
             onClick={() => setView("settings")}
@@ -218,23 +267,50 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
         <header className="workspace-header">
           <div>
             <p className="eyebrow">Content workspace</p>
-            <h1>{view === "overview" ? "Overview" : "Settings"}</h1>
+            <h1>
+              {view === "overview"
+                ? "Overview"
+                : view === "content-types"
+                  ? "Content types"
+                  : view === "entries"
+                    ? "Entries"
+                    : "Settings"}
+            </h1>
           </div>
-          <div className="account-menu">
-            <div className="account-copy">
-              <strong>{session.user.displayName}</strong>
-              <span>{session.user.email}</span>
+          <div className="header-actions">
+            {sites && sites.length > 0 ? (
+              <label className="header-site-selector" htmlFor="workspace-site-selector">
+                <span>Site</span>
+                <select
+                  aria-label="Workspace site"
+                  id="workspace-site-selector"
+                  onChange={(event) => setSelectedSiteId(event.target.value)}
+                  value={selectedSiteId}
+                >
+                  {sites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <div className="account-menu">
+              <div className="account-copy">
+                <strong>{session.user.displayName}</strong>
+                <span>{session.user.email}</span>
+              </div>
+              <button
+                aria-label="Sign out"
+                className="icon-button account-logout"
+                disabled={signingOut}
+                onClick={onLogout}
+                title="Sign out"
+                type="button"
+              >
+                <LogOut aria-hidden="true" />
+              </button>
             </div>
-            <button
-              aria-label="Sign out"
-              className="icon-button account-logout"
-              disabled={signingOut}
-              onClick={onLogout}
-              title="Sign out"
-              type="button"
-            >
-              <LogOut aria-hidden="true" />
-            </button>
           </div>
         </header>
 
@@ -264,7 +340,42 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
               ))}
             </section>
           </section>
-        ) : (
+        ) : null}
+
+        {view === "content-types" || view === "entries" ? (
+          !selectedSiteId ? (
+            <p className="empty-state editorial-empty">
+              Select an available site to manage content.
+            </p>
+          ) : editorial.status === "loading" || editorial.status === "idle" ? (
+            <p className="settings-status editorial-loading" aria-live="polite">
+              <LoaderCircle aria-hidden="true" className="spin" size={18} /> Loading editorial
+              workspace
+            </p>
+          ) : editorial.status === "error" ? (
+            <SettingsFailure onRetry={() => setEditorialReload((current) => current + 1)}>
+              {editorial.message}
+            </SettingsFailure>
+          ) : view === "content-types" ? (
+            <ContentTypesView
+              canWrite={editorial.access.permissionKeys.includes("content.write")}
+              csrfToken={session.csrfToken}
+              key={selectedSiteId}
+              siteId={selectedSiteId}
+            />
+          ) : (
+            <EntriesView
+              canPublish={editorial.access.permissionKeys.includes("content.publish")}
+              canWrite={editorial.access.permissionKeys.includes("content.write")}
+              context={editorial.context}
+              csrfToken={session.csrfToken}
+              key={selectedSiteId}
+              siteId={selectedSiteId}
+            />
+          )
+        ) : null}
+
+        {view === "settings" ? (
           <section className="settings-layout" aria-label="CMS settings">
             {session.user.isSystemAdmin ? (
               <section className="settings-section" aria-labelledby="platform-branding-title">
@@ -417,7 +528,7 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
               ) : null}
             </p>
           </section>
-        )}
+        ) : null}
       </section>
     </main>
   );
