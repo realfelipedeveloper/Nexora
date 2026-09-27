@@ -97,6 +97,13 @@ export type RevisionComparison = {
   from: ContentRevision;
   to: ContentRevision;
 };
+export type ContentPreviewToken = {
+  expiresAt: string;
+  id: string;
+  localeId: string;
+  revision: number;
+  token: string;
+};
 
 type Page<Value> = { items: Value[]; nextCursor?: string };
 type Versioned<Value> = { value: Value; version: number };
@@ -439,5 +446,23 @@ export function restoreRevision(
     "POST",
     undefined,
     currentRevision,
+  );
+}
+
+export function issueContentPreview(
+  csrfToken: string,
+  siteId: string,
+  contentEntryId: string,
+  localeId?: string,
+  revision?: number,
+) {
+  return mutate<ContentPreviewToken>(
+    `${entryResource(siteId, contentEntryId, "preview-tokens")}`,
+    csrfToken,
+    "POST",
+    {
+      ...(localeId === undefined ? {} : { localeId }),
+      ...(revision === undefined ? {} : { revision }),
+    },
   );
 }

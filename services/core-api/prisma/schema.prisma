@@ -79,6 +79,7 @@ model User {
   editorialReviews        ContentEntryReview[]
   publicationSchedules    PublicationSchedule[]    @relation("PublicationScheduleRequestedBy")
   uploadedAssets          Asset[]                  @relation("AssetCreatedBy")
+  contentPreviewTokens    ContentPreviewToken[]    @relation("ContentPreviewTokenCreatedBy")
 }
 
 model Session {
@@ -127,6 +128,7 @@ model Site {
   settings              SiteSetting[]
   assets                Asset[]
   contentAssetRelations ContentAssetRelation[]
+  contentPreviewTokens  ContentPreviewToken[]
 
   @@index([status])
 }
@@ -217,6 +219,7 @@ model Locale {
   redirects             Redirect[]
   publishedContent      PublishedContentEntry[]
   contentAssetRelations ContentAssetRelation[]
+  contentPreviewTokens  ContentPreviewToken[]
 
   @@unique([siteId, code])
   @@unique([id, siteId])
@@ -478,6 +481,7 @@ model ContentEntry {
   publishedProjections     PublishedContentEntry[]
   publicationSchedules     PublicationSchedule[]
   assetRelations           ContentAssetRelation[]
+  previewTokens            ContentPreviewToken[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
@@ -607,6 +611,28 @@ model ContentEntrySnapshot {
   @@unique([contentEntryId, siteId, revision])
   @@index([contentEntryId, siteId, revision(sort: Desc)])
   @@index([siteId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model ContentPreviewToken {
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique @db.Char(64)
+  siteId         String
+  contentEntryId String
+  localeId       String
+  revision       Int
+  createdById    String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Cascade)
+  createdBy    User         @relation("ContentPreviewTokenCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([siteId, contentEntryId, revision])
+  @@index([createdById, createdAt(sort: Desc)])
 }
 
 model ContentLocale {

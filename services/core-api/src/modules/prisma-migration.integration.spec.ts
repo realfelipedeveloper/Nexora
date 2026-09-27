@@ -28,6 +28,10 @@ import { ContentAssetRelationService } from "./content/content-asset-relation.se
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
 import {
+  ContentPreviewNotFoundError,
+  ContentPreviewService,
+} from "./content/content-preview.service.js";
+import {
   NavigationConflictError,
   NavigationRoutingService,
 } from "./content/navigation-routing.service.js";
@@ -234,6 +238,7 @@ describe("PostgreSQL migrations and integration", () => {
         "ContentAssetRelation",
         "ContentEntry",
         "ContentEntrySnapshot",
+        "ContentPreviewToken",
         "ContentLocale",
         "ContentType",
         "ContentTypeSchemaVersion",
@@ -3958,6 +3963,116 @@ describe("PostgreSQL migrations and integration", () => {
       }
     } finally {
       await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("keeps draft preview tokens opaque, revision-bound, expiring, and isolated from publication", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const metrics = new ContentMetrics();
+    const previews = new ContentPreviewService(prisma, metrics);
+
+    try {
+      const [site, foreignSite] = await Promise.all([
+        prisma.site.create({ data: { key: `preview-${randomUUID()}`, name: "Preview Site" } }),
+        prisma.site.create({
+          data: { key: `preview-foreign-${randomUUID()}`, name: "Foreign Preview Site" },
+        }),
+      ]);
+      const locale = await prisma.locale.create({
+        data: { code: "pt-BR", isDefault: true, siteId: site.id },
+      });
+      const contentType = await prisma.contentType.create({
+        data: { displayName: "Preview Article", key: "preview-article", siteId: site.id },
+      });
+      await prisma.contentTypeSchemaVersion.create({
+        data: {
+          contentTypeId: contentType.id,
+          definition: { displayName: contentType.displayName, fields: [], key: contentType.key },
+          siteId: site.id,
+          version: 1,
+        },
+      });
+      const email = `preview-${randomUUID()}@example.com`;
+      const actor = await prisma.user.create({
+        data: {
+          displayName: "Preview Editor",
+          email,
+          normalizedEmail: email,
+          passwordHash: "not-used-by-preview-tests",
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, siteId: site.id },
+      });
+      await prisma.contentLocale.create({
+        data: {
+          contentEntryId: entry.id,
+          data: { title: "Original private draft" },
+          localeId: locale.id,
+          siteId: site.id,
+        },
+      });
+      await prisma.contentEntrySnapshot.create({
+        data: {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { title: "Original private draft" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 1,
+            },
+          ],
+          revision: 1,
+          schemaVersion: 1,
+          siteId: site.id,
+          status: "DRAFT",
+        },
+      });
+
+      const issued = await previews.issue(actor.id, site.id, entry.id, { localeId: locale.id });
+      const persisted = await prisma.contentPreviewToken.findUniqueOrThrow({
+        where: { id: issued.id },
+      });
+      expect(persisted.tokenHash).not.toBe(issued.token);
+      expect(persisted.tokenHash).toHaveLength(64);
+      await expect(previews.redeem(issued.token)).resolves.toMatchObject({
+        data: { title: "Original private draft" },
+        revision: 1,
+        site: { key: site.key },
+        status: "DRAFT",
+      });
+      await expect(
+        previews.issue(actor.id, foreignSite.id, entry.id, { localeId: locale.id }),
+      ).rejects.toBeInstanceOf(ContentPreviewNotFoundError);
+      await expect(
+        prisma.publishedContentEntry.count({ where: { contentEntryId: entry.id } }),
+      ).resolves.toBe(0);
+
+      await prisma.contentEntry.update({
+        data: { revision: 2 },
+        where: { id_siteId: { id: entry.id, siteId: site.id } },
+      });
+      await prisma.contentLocale.update({
+        data: { data: { title: "New private draft" }, revision: 2 },
+        where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+      });
+      await expect(previews.redeem(issued.token)).resolves.toMatchObject({
+        data: { title: "Original private draft" },
+        revision: 1,
+      });
+
+      await prisma.contentPreviewToken.update({
+        data: { expiresAt: new Date("2000-01-01T00:00:00.000Z") },
+        where: { id: issued.id },
+      });
+      await expect(previews.redeem(issued.token)).rejects.toBeInstanceOf(
+        ContentPreviewNotFoundError,
+      );
+    } finally {
       await prisma.$disconnect();
     }
   }, 120_000);

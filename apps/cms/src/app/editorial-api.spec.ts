@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   changeEntryStatus,
   getContentType,
+  issueContentPreview,
   listContentEntries,
   saveContentEntry,
 } from "./editorial-api";
@@ -74,6 +75,32 @@ describe("CMS editorial API", () => {
         message: "Approval required.",
         status: 409,
       }),
+    );
+  });
+
+  it("issues revision-scoped previews with CSRF protection", async () => {
+    const preview = {
+      expiresAt: "2026-09-26T22:05:00.000Z",
+      id: "preview-1",
+      localeId: "locale-1",
+      revision: 4,
+      token: "A".repeat(32),
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(preview));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      issueContentPreview("csrf-token", "site-1", "entry-1", "locale-1", 4),
+    ).resolves.toEqual(preview);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/core/sites/site-1/content-entries/entry-1/preview-tokens",
+      {
+        body: JSON.stringify({ localeId: "locale-1", revision: 4 }),
+        cache: "no-store",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "x-csrf-token": "csrf-token" },
+        method: "POST",
+      },
     );
   });
 });

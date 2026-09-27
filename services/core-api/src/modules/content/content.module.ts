@@ -11,6 +11,8 @@ import { ContentCollaborationController } from "./content-collaboration.controll
 import { ContentCollaborationService } from "./content-collaboration.service.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentMetrics } from "./content-metrics.js";
+import { ContentPreviewController } from "./content-preview.controller.js";
+import { ContentPreviewService } from "./content-preview.service.js";
 import { PublicContentController } from "./content-public.controller.js";
 import { PublicContentService } from "./content-public.service.js";
 import { ContentVersioningController } from "./content-versioning.controller.js";
@@ -39,6 +41,7 @@ import { MEDIA_STORAGE, S3MediaStorage } from "./media-storage.js";
     ContentTypesController,
     EditorialContextController,
     ContentVersioningController,
+    ContentPreviewController,
     PublicContentController,
     PublicNavigationController,
     PublicationSchedulesController,
@@ -56,6 +59,7 @@ import { MEDIA_STORAGE, S3MediaStorage } from "./media-storage.js";
     ContentFieldValidator,
     ContentMetrics,
     ContentVersioningService,
+    ContentPreviewService,
     PublicContentService,
     NavigationRoutingService,
     PublicationSchedulerService,
@@ -70,6 +74,7 @@ import { MEDIA_STORAGE, S3MediaStorage } from "./media-storage.js";
     ContentFieldValidator,
     ContentMetrics,
     ContentVersioningService,
+    ContentPreviewService,
     PublicContentService,
     NavigationRoutingService,
     PublicationSchedulerService,

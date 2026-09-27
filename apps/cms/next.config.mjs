@@ -12,6 +12,20 @@ const nextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  async headers() {
+    return [
+      {
+        headers: [
+          { key: "CDN-Cache-Control", value: "no-store" },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Surrogate-Control", value: "no-store" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+        source: "/preview/:path*",
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

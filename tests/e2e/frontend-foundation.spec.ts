@@ -357,6 +357,7 @@ test.describe("frontend foundation", () => {
     let typeWriteHeaders: Record<string, string> | undefined;
     let statusWriteHeaders: Record<string, string> | undefined;
     let entryWriteBody: Record<string, unknown> | undefined;
+    let previewWriteBody: Record<string, unknown> | undefined;
     await page.route("**/api/core/auth/session", async (route) => {
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
@@ -498,6 +499,19 @@ test.describe("frontend foundation", () => {
       /\/api\/core\/sites\/site-1\/content-entries(?:\/.*)?(?:\?.*)?$/u,
       async (route) => {
         const pathname = new URL(route.request().url()).pathname;
+        if (pathname.endsWith("/preview-tokens")) {
+          previewWriteBody = route.request().postDataJSON() as Record<string, unknown>;
+          await route.fulfill({
+            json: {
+              expiresAt: "2026-09-26T22:05:00.000Z",
+              id: "preview-1",
+              revision: 1,
+              token: "A".repeat(32),
+            },
+            status: 201,
+          });
+          return;
+        }
         if (pathname.endsWith("/status")) {
           statusWriteHeaders = route.request().headers();
           await route.fulfill({
@@ -534,6 +548,13 @@ test.describe("frontend foundation", () => {
         await route.fulfill({ json: { items: [entryDetail] }, status: 200 });
       },
     );
+    await page.context().route("**/preview/**", async (route) => {
+      await route.fulfill({
+        body: "<!doctype html><title>Secure preview</title><h1>Preview opened</h1>",
+        contentType: "text/html",
+        status: 200,
+      });
+    });
 
     await page.goto(cmsUrl);
     await page.getByRole("button", { name: "Content types" }).click();
@@ -544,6 +565,11 @@ test.describe("frontend foundation", () => {
 
     await page.getByRole("button", { name: "Entries" }).click();
     await page.getByRole("button", { name: /Article/ }).click();
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    const previewPage = await popupPromise;
+    await expect(previewPage.getByRole("heading", { name: "Preview opened" })).toBeVisible();
+    await previewPage.close();
     const richText = page.getByRole("textbox", { name: "Body rich text" });
     await expect(richText).toContainText("Legacy body");
     await richText.fill("Structured body");
@@ -563,6 +589,7 @@ test.describe("frontend foundation", () => {
     expect(typeWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
     expect(statusWriteHeaders?.["if-match"]).toBe('"2"');
     expect(statusWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(previewWriteBody).toEqual({ localeId: "locale-1", revision: 1 });
     const writtenLocales = entryWriteBody?.locales as Array<{
       data: { body: { content: unknown[]; schemaVersion: number; type: string } };
     }>;
@@ -597,6 +624,56 @@ test.describe("frontend foundation", () => {
       scrollWidth: document.documentElement.scrollWidth,
     }));
     expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms renders a draft preview only through the no-store bearer API", async ({ page }) => {
+    const token = "P".repeat(32);
+    await page.route(`**/api/core/previews/${token}`, async (route) => {
+      await route.fulfill({
+        headers: { "Cache-Control": "private, no-store, max-age=0" },
+        json: {
+          contentType: { displayName: "Article", key: "article" },
+          data: {
+            body: {
+              content: [
+                {
+                  content: [{ text: "Private structured draft", type: "text" }],
+                  type: "paragraph",
+                },
+              ],
+              schemaVersion: 1,
+              type: "doc",
+            },
+            title: "Preview-only title",
+          },
+          expiresAt: "2030-01-01T00:05:00.000Z",
+          id: "entry-1",
+          locale: "en",
+          revision: 3,
+          schemaVersion: 2,
+          scheduledPublication: {
+            action: "PUBLISH",
+            scheduledFor: "2030-01-02T12:00:00.000Z",
+          },
+          site: { key: "docs", name: "Documentation" },
+          snapshotAt: "2030-01-01T00:00:00.000Z",
+          status: "DRAFT",
+        },
+        status: 200,
+      });
+    });
+
+    const previewResponsePromise = page.waitForResponse(`**/api/core/previews/${token}`);
+    await page.goto(`${cmsUrl}/preview/${token}`);
+    const previewResponse = await previewResponsePromise;
+
+    expect(previewResponse.headers()["cache-control"]).toBe("private, no-store, max-age=0");
+    await expect(page.getByText("Secure preview")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Article" })).toBeVisible();
+    await expect(page.getByText("Preview-only title")).toBeVisible();
+    await expect(page.getByText("Private structured draft")).toBeVisible();
+    await expect(page.getByText(/Publication scheduled for/u)).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 

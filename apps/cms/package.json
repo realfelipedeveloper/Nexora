@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@nexora/contracts": "workspace:*",
     "@nexora/rich-text": "workspace:*",
     "@nexora/schemas": "workspace:*",
     "@tiptap/pm": "3.31.3",

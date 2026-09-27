@@ -125,6 +125,9 @@ importers:
 
   apps/cms:
     dependencies:
+      "@nexora/contracts":
+        specifier: workspace:*
+        version: link:../../packages/contracts
       "@nexora/rich-text":
         specifier: workspace:*
         version: link:../../packages/rich-text
@@ -196,6 +199,9 @@ importers:
       "@nexora/config":
         specifier: workspace:*
         version: link:../../packages/config
+      "@nexora/contracts":
+        specifier: workspace:*
+        version: link:../../packages/contracts
       "@nexora/rich-text":
         specifier: workspace:*
         version: link:../../packages/rich-text
