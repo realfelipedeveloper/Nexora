@@ -304,6 +304,8 @@ textarea:focus {
 }
 
 .cms-shell {
+  min-width: 0;
+  width: 100%;
   min-height: 100vh;
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
@@ -311,6 +313,7 @@ textarea:focus {
 }
 
 .sidebar {
+  min-width: 0;
   min-height: 100vh;
   padding: 20px 16px;
   border-right: 1px solid #d9dfdc;
@@ -1901,9 +1904,9 @@ textarea:focus {
 
   .sidebar {
     min-height: auto;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     gap: 16px;
     padding: 12px 16px;
     border-right: 0;
@@ -1920,12 +1923,15 @@ textarea:focus {
   }
 
   .sidebar nav {
+    min-width: 0;
     display: block;
   }
 
   .sidebar .cms-navigation {
     min-width: 0;
+    width: 100%;
     display: flex;
+    justify-content: flex-end;
     gap: 2px;
     overflow-x: auto;
   }
@@ -1954,11 +1960,13 @@ textarea:focus {
   }
 
   .workspace-header {
+    min-width: 0;
     align-items: flex-start;
     gap: 16px;
   }
 
   .header-actions {
+    max-width: 100%;
     gap: 8px;
   }
 
