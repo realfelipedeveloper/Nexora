@@ -7,6 +7,9 @@ export default defineConfig({
       "@nexora/config": fileURLToPath(
         new URL("../../packages/config/src/index.ts", import.meta.url),
       ),
+      "@nexora/rich-text": fileURLToPath(
+        new URL("../../packages/rich-text/src/index.ts", import.meta.url),
+      ),
       "@nexora/schemas": fileURLToPath(
         new URL("../../packages/schemas/src/index.ts", import.meta.url),
       ),
@@ -18,7 +21,11 @@ export default defineConfig({
     globals: true,
     include: ["src/**/*.spec.ts"],
     coverage: {
-      exclude: ["src/**/*.spec.ts", "src/cli/provision-admin.ts"],
+      exclude: [
+        "src/**/*.spec.ts",
+        "src/cli/provision-admin.ts",
+        "src/modules/content/{malware-scanner,media-storage,media-upload}.ts",
+      ],
       include: ["src/**/*.ts"],
       provider: "v8",
       reporter: ["text", "json-summary"],

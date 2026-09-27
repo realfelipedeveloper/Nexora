@@ -47,6 +47,7 @@ import {
   InvalidContentPageError,
 } from "./content-admin.service.js";
 import { ContentDataInvalidError, ContentDataTooLargeError } from "./content-field-validator.js";
+import { InvalidAssetReferenceError } from "./content-asset-relation.service.js";
 
 type HeaderResponse = { setHeader: (name: string, value: string) => void };
 const maximumDatabaseInteger = 2_147_483_647;
@@ -93,7 +94,8 @@ function mapContentError(error: unknown): never {
   if (
     error instanceof InvalidContentInputError ||
     error instanceof InvalidContentPageError ||
-    error instanceof ContentDataInvalidError
+    error instanceof ContentDataInvalidError ||
+    error instanceof InvalidAssetReferenceError
   ) {
     throw new BadRequestException(error.message);
   }
@@ -119,6 +121,19 @@ function mapContentError(error: unknown): never {
     throw new PreconditionFailedException(error.message);
   }
   throw error;
+}
+
+@Controller("sites/:siteId/editorial-context")
+@UseGuards(SessionAuthenticationGuard, SiteAuthorizationGuard)
+export class EditorialContextController {
+  constructor(@Inject(ContentAdminService) private readonly content: ContentAdminService) {}
+
+  @Get()
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("content.read")
+  get(@Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string) {
+    return this.content.getEditorialContext(siteId);
+  }
 }
 
 @Controller("sites/:siteId/content-types")

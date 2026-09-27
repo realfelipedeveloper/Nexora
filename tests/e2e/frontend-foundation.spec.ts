@@ -35,11 +35,9 @@ test.describe("frontend foundation", () => {
     });
     const publicResponse = await page.goto(webUrl);
 
-    await expect(
-      page.getByRole("heading", { name: "Universal content, site-ready delivery." }),
-    ).toBeVisible();
-    await expect(page.getByText("ready-for-localhost")).toBeVisible();
-    await expect(page.getByText("domain-agnostic")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Nexora" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByText("Conteúdo publicado com Nexora")).toBeVisible();
 
     const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
     const publicDocument = await page.locator("html").textContent();
@@ -165,8 +163,20 @@ test.describe("frontend foundation", () => {
     await expect(page.getByRole("region", { name: "Initial field types" })).toBeVisible();
     await expect(page.locator(".field-tile")).toHaveCount(18);
     const overview = page.getByRole("button", { name: "Overview" });
+    const contentTypes = page.getByRole("button", { name: "Content types" });
+    const entries = page.getByRole("button", { name: "Entries" });
+    const media = page.getByRole("button", { name: "Media" });
+    const structure = page.getByRole("button", { name: "Site structure" });
     const settings = page.getByRole("button", { name: "Settings" });
     await overview.focus();
+    await page.keyboard.press("Tab");
+    await expect(contentTypes).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(entries).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(media).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(structure).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(settings).toBeFocused();
 
@@ -340,5 +350,902 @@ test.describe("frontend foundation", () => {
     await page.getByRole("button", { name: "Reload" }).click();
     await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
     expect(identityReads).toBe(2);
+  });
+
+  test("cms edits content models and advances an entry with scoped concurrency", async ({
+    page,
+  }) => {
+    let typeWriteHeaders: Record<string, string> | undefined;
+    let statusWriteHeaders: Record<string, string> | undefined;
+    let entryWriteBody: Record<string, unknown> | undefined;
+    let previewWriteBody: Record<string, unknown> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: [
+            "content.read",
+            "content.write",
+            "content.publish",
+            "media.read",
+            "media.write",
+          ],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({
+        json: {
+          locales: [{ code: "en", id: "locale-1", isDefault: true }],
+          members: [{ displayName: "Nexora Admin", id: "user-1" }],
+        },
+        status: 200,
+      });
+    });
+    const typeSummary = {
+      displayName: "Article",
+      id: "type-1",
+      key: "article",
+      schemaVersion: 2,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const typeDetail = {
+      ...typeSummary,
+      fields: [
+        {
+          config: {},
+          fieldType: "text",
+          id: "field-1",
+          key: "title",
+          label: "Title",
+          position: 0,
+          required: true,
+        },
+        {
+          config: { maxLength: 500000, minLength: 0 },
+          fieldType: "richText",
+          id: "field-2",
+          key: "body",
+          label: "Body",
+          position: 1,
+          required: true,
+        },
+      ],
+    };
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-types(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname.endsWith("/type-1")) {
+          if (route.request().method() === "PUT") {
+            typeWriteHeaders = route.request().headers();
+            await route.fulfill({
+              headers: { ETag: '"3"' },
+              json: { ...typeDetail, displayName: "News article", schemaVersion: 3 },
+              status: 200,
+            });
+            return;
+          }
+          await route.fulfill({ headers: { ETag: '"2"' }, json: typeDetail, status: 200 });
+          return;
+        }
+        await route.fulfill({ json: { items: [typeSummary] }, status: 200 });
+      },
+    );
+    const entryDetail = {
+      contentLocales: [
+        {
+          data: { body: "Legacy body", title: "Release" },
+          locale: { code: "en" },
+          localeId: "locale-1",
+          revision: 1,
+          schemaVersion: 2,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      contentType: { displayName: "Article", id: "type-1", key: "article" },
+      contentTypeId: "type-1",
+      id: "entry-1",
+      publishedAt: null,
+      revision: 1,
+      schemaVersion: 2,
+      status: "DRAFT",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await page.route(/\/api\/core\/sites\/site-1\/assets(?:\?.*)?$/u, async (route) => {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              altText: "Inline image",
+              checksumSha256: "a".repeat(64),
+              contentUrl:
+                "/api/core/sites/site-1/assets/00000000-0000-4000-8000-000000000001/content?v=1",
+              createdAt: "2026-09-26T12:00:00.000Z",
+              displayName: "inline.png",
+              extension: "png",
+              id: "00000000-0000-4000-8000-000000000001",
+              mimeType: "image/png",
+              originalName: "inline.png",
+              sizeBytes: 512,
+              status: "READY",
+              updatedAt: "2026-09-26T12:00:00.000Z",
+              usageCount: 0,
+              version: 1,
+            },
+          ],
+        },
+        status: 200,
+      });
+    });
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-entries(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname.endsWith("/preview-tokens")) {
+          previewWriteBody = route.request().postDataJSON() as Record<string, unknown>;
+          await route.fulfill({
+            json: {
+              expiresAt: "2026-09-26T22:05:00.000Z",
+              id: "preview-1",
+              revision: 1,
+              token: "A".repeat(32),
+            },
+            status: 201,
+          });
+          return;
+        }
+        if (pathname.endsWith("/status")) {
+          statusWriteHeaders = route.request().headers();
+          await route.fulfill({
+            headers: { ETag: '"2"' },
+            json: { ...entryDetail, revision: 3, status: "IN_REVIEW" },
+            status: 200,
+          });
+          return;
+        }
+        if (pathname.endsWith("/entry-1")) {
+          if (route.request().method() === "PUT") {
+            entryWriteBody = route.request().postDataJSON() as Record<string, unknown>;
+            const locales = entryWriteBody.locales as Array<{ data: Record<string, unknown> }>;
+            await route.fulfill({
+              headers: { ETag: '"2"' },
+              json: {
+                ...entryDetail,
+                contentLocales: [
+                  { ...entryDetail.contentLocales[0], data: locales[0]?.data, revision: 2 },
+                ],
+                revision: 2,
+              },
+              status: 200,
+            });
+            return;
+          }
+          await route.fulfill({ headers: { ETag: '"1"' }, json: entryDetail, status: 200 });
+          return;
+        }
+        if (/\/(assignments|comments|reviews|transitions)$/u.test(pathname)) {
+          await route.fulfill({ json: { items: [] }, status: 200 });
+          return;
+        }
+        await route.fulfill({ json: { items: [entryDetail] }, status: 200 });
+      },
+    );
+    await page.context().route("**/preview/**", async (route) => {
+      await route.fulfill({
+        body: "<!doctype html><title>Secure preview</title><h1>Preview opened</h1>",
+        contentType: "text/html",
+        status: 200,
+      });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Content types" }).click();
+    await page.getByRole("button", { name: /Article/ }).click();
+    await page.getByLabel("Display name").fill("News article");
+    await page.getByRole("button", { name: "Save type" }).click();
+    await expect(page.getByText("Content type updated.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Entries" }).click();
+    await page.getByRole("button", { name: /Article/ }).click();
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    const previewPage = await popupPromise;
+    await expect(previewPage.getByRole("heading", { name: "Preview opened" })).toBeVisible();
+    await previewPage.close();
+    const richText = page.getByRole("textbox", { name: "Body rich text" });
+    await expect(richText).toContainText("Legacy body");
+    await richText.fill("Structured body");
+    await richText.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.getByRole("button", { name: "Bold" }).click();
+    await richText.press("End");
+    await page.getByRole("button", { name: "Insert media" }).click();
+    await page.getByRole("button", { name: /inline.png/ }).click();
+    await page.getByRole("button", { name: "Use selected" }).click();
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByText("Entry saved.")).toBeVisible();
+    await page.getByRole("tab", { name: "Workflow" }).click();
+    await page.getByRole("button", { name: "Submit for review" }).click();
+    await expect(page.getByText("Submitted for review.")).toBeVisible();
+
+    expect(typeWriteHeaders?.["if-match"]).toBe('"2"');
+    expect(typeWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(statusWriteHeaders?.["if-match"]).toBe('"2"');
+    expect(statusWriteHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(previewWriteBody).toEqual({ localeId: "locale-1", revision: 1 });
+    const writtenLocales = entryWriteBody?.locales as Array<{
+      data: { body: { content: unknown[]; schemaVersion: number; type: string } };
+    }>;
+    const writtenBody = writtenLocales[0]?.data.body;
+    expect(writtenBody).toMatchObject({ schemaVersion: 1, type: "doc" });
+    expect(writtenBody?.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              marks: expect.arrayContaining([expect.objectContaining({ type: "bold" })]),
+              text: "Structured body",
+              type: "text",
+            }),
+          ]),
+          type: "paragraph",
+        }),
+        expect.objectContaining({
+          attrs: expect.objectContaining({
+            altText: "Inline image",
+            assetId: "00000000-0000-4000-8000-000000000001",
+            displayName: "inline.png",
+            kind: "image",
+          }),
+          type: "asset",
+        }),
+      ]),
+    );
+    await page.setViewportSize({ height: 844, width: 390 });
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms renders a draft preview only through the no-store bearer API", async ({ page }) => {
+    const token = "P".repeat(32);
+    await page.route(`**/api/core/previews/${token}`, async (route) => {
+      await route.fulfill({
+        headers: { "Cache-Control": "private, no-store, max-age=0" },
+        json: {
+          contentType: { displayName: "Article", key: "article" },
+          data: {
+            body: {
+              content: [
+                {
+                  content: [{ text: "Private structured draft", type: "text" }],
+                  type: "paragraph",
+                },
+              ],
+              schemaVersion: 1,
+              type: "doc",
+            },
+            title: "Preview-only title",
+          },
+          expiresAt: "2030-01-01T00:05:00.000Z",
+          id: "entry-1",
+          locale: "en",
+          revision: 3,
+          schemaVersion: 2,
+          scheduledPublication: {
+            action: "PUBLISH",
+            scheduledFor: "2030-01-02T12:00:00.000Z",
+          },
+          site: { key: "docs", name: "Documentation" },
+          snapshotAt: "2030-01-01T00:00:00.000Z",
+          status: "DRAFT",
+        },
+        status: 200,
+      });
+    });
+
+    const previewResponsePromise = page.waitForResponse(`**/api/core/previews/${token}`);
+    await page.goto(`${cmsUrl}/preview/${token}`);
+    const previewResponse = await previewResponsePromise;
+
+    expect(previewResponse.headers()["cache-control"]).toBe("private, no-store, max-age=0");
+    await expect(page.getByText("Secure preview")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Article" })).toBeVisible();
+    await expect(page.getByText("Preview-only title")).toBeVisible();
+    await expect(page.getByText("Private structured draft")).toBeVisible();
+    await expect(page.getByText(/Publication scheduled for/u)).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms approves, publishes, compares, and restores an editorial revision", async ({
+    page,
+  }) => {
+    const now = "2026-09-27T12:00:00.000Z";
+    let approved = false;
+    let currentRevision = 2;
+    let currentStatus = "IN_REVIEW";
+    const writes: Array<{ ifMatch?: string; path: string }> = [];
+    const entry = () => ({
+      contentLocales: [
+        {
+          data: { title: currentRevision >= 2 ? "Current title" : "Original title" },
+          locale: { code: "en" },
+          localeId: "locale-1",
+          revision: currentRevision,
+          schemaVersion: 1,
+          updatedAt: now,
+        },
+      ],
+      contentType: { displayName: "Article", id: "type-1", key: "article" },
+      contentTypeId: "type-1",
+      id: "entry-1",
+      publishedAt: currentStatus === "PUBLISHED" ? now : null,
+      revision: currentRevision,
+      schemaVersion: 1,
+      status: currentStatus,
+      updatedAt: now,
+    });
+
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: ["content.read", "content.write", "content.publish"],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({
+        json: {
+          locales: [{ code: "en", id: "locale-1", isDefault: true }],
+          members: [],
+        },
+        status: 200,
+      });
+    });
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-types(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const detail = {
+          displayName: "Article",
+          fields: [],
+          id: "type-1",
+          key: "article",
+          schemaVersion: 1,
+          updatedAt: now,
+        };
+        await route.fulfill(
+          new URL(route.request().url()).pathname.endsWith("/type-1")
+            ? { headers: { ETag: '"1"' }, json: detail, status: 200 }
+            : { json: { items: [detail] }, status: 200 },
+        );
+      },
+    );
+    await page.route(
+      /\/api\/core\/sites\/site-1\/content-entries(?:\/.*)?(?:\?.*)?$/u,
+      async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const pathname = url.pathname;
+        if (pathname.endsWith("/reviews")) {
+          if (request.method() === "POST") {
+            approved = true;
+            writes.push({ ifMatch: request.headers()["if-match"], path: "approve" });
+            await route.fulfill({
+              headers: { ETag: `"${currentRevision}"` },
+              json: {
+                entry: entry(),
+                review: {
+                  contentRevision: currentRevision,
+                  createdAt: now,
+                  decision: "APPROVED",
+                  id: "review-1",
+                  note: null,
+                  reviewer: { displayName: "Nexora Admin", id: "user-1" },
+                },
+              },
+              status: 201,
+            });
+            return;
+          }
+          await route.fulfill({
+            json: {
+              items: approved
+                ? [
+                    {
+                      contentRevision: currentRevision,
+                      createdAt: now,
+                      decision: "APPROVED",
+                      id: "review-1",
+                      note: null,
+                      reviewer: { displayName: "Nexora Admin", id: "user-1" },
+                    },
+                  ]
+                : [],
+            },
+            status: 200,
+          });
+          return;
+        }
+        if (pathname.endsWith("/status")) {
+          writes.push({ ifMatch: request.headers()["if-match"], path: "publish" });
+          currentRevision = 3;
+          currentStatus = "PUBLISHED";
+          await route.fulfill({ headers: { ETag: '"3"' }, json: entry(), status: 200 });
+          return;
+        }
+        if (pathname.endsWith("/revisions/compare")) {
+          await route.fulfill({
+            json: {
+              fieldChanges: [
+                {
+                  after: "Current title",
+                  before: "Original title",
+                  change: "CHANGED",
+                  fieldKey: "title",
+                  localeCode: "en",
+                },
+              ],
+              from: {
+                actorId: "user-1",
+                createdAt: now,
+                publishedAt: null,
+                revision: 2,
+                schemaVersion: 1,
+                status: "IN_REVIEW",
+              },
+              to: {
+                actorId: "user-1",
+                createdAt: now,
+                publishedAt: now,
+                revision: 3,
+                schemaVersion: 1,
+                status: "PUBLISHED",
+              },
+            },
+            status: 200,
+          });
+          return;
+        }
+        if (pathname.endsWith("/revisions/1/restore")) {
+          writes.push({ ifMatch: request.headers()["if-match"], path: "restore" });
+          currentRevision = 4;
+          currentStatus = "DRAFT";
+          await route.fulfill({ headers: { ETag: '"4"' }, json: entry(), status: 200 });
+          return;
+        }
+        if (pathname.endsWith("/revisions")) {
+          await route.fulfill({
+            json: [
+              {
+                actorId: "user-1",
+                createdAt: now,
+                publishedAt: now,
+                revision: 3,
+                schemaVersion: 1,
+                status: "PUBLISHED",
+              },
+              {
+                actorId: "user-1",
+                createdAt: now,
+                publishedAt: null,
+                revision: 2,
+                schemaVersion: 1,
+                status: "IN_REVIEW",
+              },
+              {
+                actorId: "user-1",
+                createdAt: now,
+                publishedAt: null,
+                revision: 1,
+                schemaVersion: 1,
+                status: "DRAFT",
+              },
+            ],
+            status: 200,
+          });
+          return;
+        }
+        if (/\/(assignments|comments|transitions)$/u.test(pathname)) {
+          await route.fulfill({ json: { items: [] }, status: 200 });
+          return;
+        }
+        if (pathname.endsWith("/entry-1")) {
+          await route.fulfill({
+            headers: { ETag: `"${currentRevision}"` },
+            json: entry(),
+            status: 200,
+          });
+          return;
+        }
+        await route.fulfill({ json: { items: [entry()] }, status: 200 });
+      },
+    );
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Entries" }).click();
+    await page.getByRole("button", { name: /Article/u }).click();
+    await page.getByRole("tab", { name: "Workflow" }).click();
+    await page.getByRole("button", { name: "Approve revision" }).click();
+    await expect(page.getByText("Revision approved.")).toBeVisible();
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(page.getByText("Entry published.")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Revisions" }).click();
+    await page.getByRole("button", { name: "Compare", exact: true }).click();
+    await expect(page.getByText("Current title")).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page
+      .getByRole("article")
+      .filter({ hasText: "Revision 1" })
+      .getByRole("button", { name: "Restore" })
+      .click();
+    await expect(page.getByText("Revision 1 restored.")).toBeVisible();
+
+    expect(writes).toEqual([
+      { ifMatch: '"2"', path: "approve" },
+      { ifMatch: '"2"', path: "publish" },
+      { ifMatch: '"3"', path: "restore" },
+    ]);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms configures sections, routes, and menus as one accessible delivery flow", async ({
+    page,
+  }) => {
+    const sectionId = "00000000-0000-4000-8000-000000000010";
+    const entryId = "00000000-0000-4000-8000-000000000020";
+    const localeId = "00000000-0000-4000-8000-000000000030";
+    const routeId = "00000000-0000-4000-8000-000000000040";
+    const menuId = "00000000-0000-4000-8000-000000000050";
+    const itemId = "00000000-0000-4000-8000-000000000060";
+    const now = "2026-09-27T12:00:00.000Z";
+    const writes: Array<{ body: unknown; csrf?: string; path: string }> = [];
+    let sections: unknown[] = [];
+    let placements: unknown[] = [];
+    let routes: unknown[] = [];
+    let menus: unknown[] = [];
+    let menuItems: unknown[] = [];
+
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: ["content.read", "content.write"],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({
+        json: {
+          locales: [{ code: "en", id: localeId, isDefault: true }],
+          members: [],
+        },
+        status: 200,
+      });
+    });
+    await page.route(/\/api\/core\/sites\/site-1\/content-entries\?.*$/u, async (route) => {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              contentLocales: [],
+              contentType: { displayName: "Article", id: "type-1", key: "article" },
+              contentTypeId: "type-1",
+              id: entryId,
+              publishedAt: now,
+              revision: 2,
+              schemaVersion: 1,
+              status: "PUBLISHED",
+              updatedAt: now,
+            },
+          ],
+        },
+        status: 200,
+      });
+    });
+    await page.route(/\/api\/core\/sites\/site-1\/sections(?:\?limit=100)?$/u, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        writes.push({
+          body,
+          csrf: route.request().headers()["x-csrf-token"],
+          path: "sections",
+        });
+        const section = { ...body, createdAt: now, id: sectionId, updatedAt: now };
+        sections = [section];
+        await route.fulfill({ json: section, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: { items: sections }, status: 200 });
+    });
+    await page.route(
+      new RegExp(
+        `/api/core/sites/site-1/sections/${sectionId}/placements(?:/${entryId}|\\?limit=100)$`,
+        "u",
+      ),
+      async (route) => {
+        if (route.request().method() === "PUT") {
+          const body = route.request().postDataJSON();
+          writes.push({
+            body,
+            csrf: route.request().headers()["x-csrf-token"],
+            path: "placements",
+          });
+          const placement = {
+            ...body,
+            contentEntryId: entryId,
+            createdAt: now,
+            id: "placement-1",
+            sectionId,
+            updatedAt: now,
+          };
+          placements = [placement];
+          await route.fulfill({ json: placement, status: 200 });
+          return;
+        }
+        await route.fulfill({ json: { items: placements }, status: 200 });
+      },
+    );
+    await page.route(/\/api\/core\/sites\/site-1\/routes(?:\?limit=100)?$/u, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON() as {
+          contentEntryId: string;
+          localeId: string;
+          path: string;
+        };
+        writes.push({
+          body,
+          csrf: route.request().headers()["x-csrf-token"],
+          path: "routes",
+        });
+        const siteRoute = {
+          aliases: [],
+          contentEntryId: body.contentEntryId,
+          createdAt: now,
+          id: routeId,
+          locale: { code: "en", id: body.localeId },
+          path: { path: body.path },
+          updatedAt: now,
+        };
+        routes = [siteRoute];
+        await route.fulfill({ json: siteRoute, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: { items: routes }, status: 200 });
+    });
+    await page.route(/\/api\/core\/sites\/site-1\/menus(?:\?limit=100)?$/u, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON() as {
+          key: string;
+          localeId: string;
+          name: string;
+        };
+        writes.push({
+          body,
+          csrf: route.request().headers()["x-csrf-token"],
+          path: "menus",
+        });
+        const menu = {
+          createdAt: now,
+          id: menuId,
+          key: body.key,
+          locale: { code: "en", id: body.localeId },
+          name: body.name,
+          updatedAt: now,
+        };
+        menus = [menu];
+        await route.fulfill({ json: menu, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: { items: menus }, status: 200 });
+    });
+    await page.route(
+      new RegExp(`/api/core/sites/site-1/menus/${menuId}/items(?:\\?limit=100)?$`, "u"),
+      async (route) => {
+        if (route.request().method() === "POST") {
+          const body = route.request().postDataJSON() as {
+            label: string;
+            routeId: string;
+          };
+          writes.push({
+            body,
+            csrf: route.request().headers()["x-csrf-token"],
+            path: "menu-items",
+          });
+          const item = {
+            ...body,
+            createdAt: now,
+            id: itemId,
+            route: { id: routeId, path: { path: "/news" } },
+            updatedAt: now,
+          };
+          menuItems = [item];
+          await route.fulfill({ json: item, status: 201 });
+          return;
+        }
+        await route.fulfill({ json: { items: menuItems }, status: 200 });
+      },
+    );
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Site structure" }).click();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "Site structure", exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "New section" }).click();
+    await page.getByLabel("Name").fill("News");
+    await page.getByLabel("Key").fill("news");
+    await page.getByRole("button", { name: "Save section" }).click();
+    await expect(page.getByRole("button", { name: /News news/u })).toBeVisible();
+    await page.getByLabel("Entry").selectOption(entryId);
+    await page.getByLabel("Primary").check();
+    await page.getByRole("button", { name: "Place entry" }).click();
+    await expect(page.getByText(/Position 0 · Visible · Primary/u)).toBeVisible();
+
+    await page.getByRole("tab", { name: "Routes" }).click();
+    await page.getByRole("button", { name: "New route" }).click();
+    await page.getByLabel("Path").fill("/news");
+    await page.getByLabel("Content entry").selectOption(entryId);
+    await page.getByRole("button", { name: "Save route" }).click();
+    await expect(page.getByRole("button", { name: /\/news/u })).toBeVisible();
+
+    await page.getByRole("tab", { name: "Menus" }).click();
+    await page.getByRole("button", { name: "New menu" }).click();
+    await page.getByLabel("Name").fill("Primary navigation");
+    await page.getByLabel("Key").fill("primary");
+    await page.getByRole("button", { name: "Save menu" }).click();
+    await page.getByRole("button", { name: /Primary navigation/u }).click();
+    await page.getByRole("button", { name: "Add item" }).click();
+    await page.getByLabel("Label").fill("News");
+    await page.locator(".menu-item-form").getByRole("combobox").nth(1).selectOption(routeId);
+    await page.getByRole("button", { name: "Save item" }).click();
+    await expect(page.getByRole("button", { name: /News \/news/u })).toBeVisible();
+
+    expect(writes.map((write) => write.path)).toEqual([
+      "sections",
+      "placements",
+      "routes",
+      "menus",
+      "menu-items",
+    ]);
+    expect(writes.every((write) => write.csrf === csrfToken)).toBe(true);
+    await page.setViewportSize({ height: 844, width: 390 });
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  });
+
+  test("cms uploads a scanned asset into the site media library", async ({ page }) => {
+    let uploadHeaders: Record<string, string> | undefined;
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/access", async (route) => {
+      await route.fulfill({
+        json: {
+          isSystemAdmin: true,
+          permissionKeys: ["content.read", "media.read", "media.write"],
+          roleKeys: [],
+          siteId: "site-1",
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/editorial-context", async (route) => {
+      await route.fulfill({ json: { locales: [], members: [] }, status: 200 });
+    });
+    const asset = {
+      altText: null,
+      checksumSha256: "a".repeat(64),
+      contentUrl:
+        "/api/core/public/sites/docs/assets/00000000-0000-4000-8000-000000000001/content?v=1",
+      createdAt: "2026-09-26T12:00:00.000Z",
+      displayName: "report.pdf",
+      extension: "pdf",
+      id: "00000000-0000-4000-8000-000000000001",
+      mimeType: "application/pdf",
+      originalName: "report.pdf",
+      sizeBytes: 512,
+      status: "READY",
+      updatedAt: "2026-09-26T12:00:00.000Z",
+      usageCount: 0,
+      version: 1,
+    };
+    await page.route(/\/api\/core\/sites\/site-1\/assets(?:\?.*)?$/u, async (route) => {
+      if (route.request().method() === "POST") {
+        uploadHeaders = route.request().headers();
+        await route.fulfill({ json: asset, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: { items: [] }, status: 200 });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Media" }).click();
+    await page.getByLabel("Upload media file").setInputFiles({
+      buffer: Buffer.from("%PDF-1.4\n%%EOF"),
+      mimeType: "application/pdf",
+      name: "report.pdf",
+    });
+
+    await expect(page.getByText("Asset uploaded and scanned.")).toBeVisible();
+    await expect(page.getByLabel("Display name")).toHaveValue("report.pdf");
+    expect(uploadHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(uploadHeaders?.["content-type"]).toContain("multipart/form-data; boundary=");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 });

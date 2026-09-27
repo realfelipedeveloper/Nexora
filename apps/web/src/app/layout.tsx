@@ -3,12 +3,12 @@ import "./styles.css";
 
 export const metadata: Metadata = {
   title: "Nexora",
-  description: "Universal web platform with an embedded CMS.",
+  description: "Conteúdo publicado com Nexora.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang={process.env.NEXORA_PUBLIC_LOCALE ?? "pt-BR"}>
       <body>{children}</body>
     </html>
   );

@@ -28,6 +28,34 @@ enum ContentEntryReviewDecision {
   CHANGES_REQUESTED
 }
 
+enum MenuItemLinkType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum RoutingPathKind {
+  ROUTE
+  ALIAS
+  REDIRECT
+}
+
+enum PublicationAction {
+  PUBLISH
+  UNPUBLISH
+}
+
+enum PublicationScheduleStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum AssetStatus {
+  READY
+}
+
 model User {
   id                String     @id @default(uuid())
   email             String
@@ -43,10 +71,15 @@ model User {
   sessions                Session[]
   siteRoleAssignments     SiteRoleAssignment[]     @relation("SiteRoleUser")
   siteRoleGrants          SiteRoleAssignment[]     @relation("SiteRoleGrantedBy")
+  sectionRoleAssignments  SectionRoleAssignment[]  @relation("SectionRoleUser")
+  sectionRoleGrants       SectionRoleAssignment[]  @relation("SectionRoleGrantedBy")
   contentAssignments      ContentEntryAssignment[] @relation("ContentEntryAssignee")
   contentAssignmentGrants ContentEntryAssignment[] @relation("ContentEntryAssignedBy")
   editorialComments       ContentEntryComment[]
   editorialReviews        ContentEntryReview[]
+  publicationSchedules    PublicationSchedule[]    @relation("PublicationScheduleRequestedBy")
+  uploadedAssets          Asset[]                  @relation("AssetCreatedBy")
+  contentPreviewTokens    ContentPreviewToken[]    @relation("ContentPreviewTokenCreatedBy")
 }
 
 model Session {
@@ -72,16 +105,30 @@ model Site {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  locales            Locale[]
-  contentTypes       ContentType[]
-  contentEntries     ContentEntry[]
-  contentSnapshots   ContentEntrySnapshot[]
-  contentAssignments ContentEntryAssignment[]
-  editorialComments  ContentEntryComment[]
-  editorialReviews   ContentEntryReview[]
-  roleAssignments    SiteRoleAssignment[]
-  sections           Section[]
-  settings           SiteSetting[]
+  locales               Locale[]
+  contentTypes          ContentType[]
+  contentEntries        ContentEntry[]
+  contentSnapshots      ContentEntrySnapshot[]
+  contentAssignments    ContentEntryAssignment[]
+  editorialComments     ContentEntryComment[]
+  editorialReviews      ContentEntryReview[]
+  contentPlacements     ContentPlacement[]
+  menus                 Menu[]
+  menuItems             MenuItem[]
+  routingPaths          RoutingPath[]
+  routes                Route[]
+  routeAliases          RouteAlias[]
+  redirects             Redirect[]
+  publishedContent      PublishedContentEntry[]
+  publicationSchedules  PublicationSchedule[]
+  domainEvents          DomainEvent[]
+  roleAssignments       SiteRoleAssignment[]
+  sectionAssignments    SectionRoleAssignment[]
+  sections              Section[]
+  settings              SiteSetting[]
+  assets                Asset[]
+  contentAssetRelations ContentAssetRelation[]
+  contentPreviewTokens  ContentPreviewToken[]
 
   @@index([status])
 }
@@ -120,8 +167,9 @@ model Role {
   name        String
   description String
 
-  permissions     RolePermission[]
-  siteAssignments SiteRoleAssignment[]
+  permissions        RolePermission[]
+  siteAssignments    SiteRoleAssignment[]
+  sectionAssignments SectionRoleAssignment[]
 }
 
 model RolePermission {
@@ -163,7 +211,15 @@ model Locale {
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  contentLocales ContentLocale[]
+  contentLocales        ContentLocale[]
+  menus                 Menu[]
+  routingPaths          RoutingPath[]
+  routes                Route[]
+  routeAliases          RouteAlias[]
+  redirects             Redirect[]
+  publishedContent      PublishedContentEntry[]
+  contentAssetRelations ContentAssetRelation[]
+  contentPreviewTokens  ContentPreviewToken[]
 
   @@unique([siteId, code])
   @@unique([id, siteId])
@@ -178,13 +234,177 @@ model Section {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  parent   Section?  @relation("SectionHierarchy", fields: [parentId, siteId], references: [id, siteId], onDelete: Restrict)
-  children Section[] @relation("SectionHierarchy")
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  parent          Section?                @relation("SectionHierarchy", fields: [parentId, siteId], references: [id, siteId], onDelete: Restrict)
+  children        Section[]               @relation("SectionHierarchy")
+  placements      ContentPlacement[]
+  roleAssignments SectionRoleAssignment[]
 
   @@unique([id, siteId])
   @@unique([siteId, key])
   @@index([siteId, parentId, createdAt, id])
+}
+
+model ContentPlacement {
+  id             String   @id @default(uuid())
+  siteId         String
+  sectionId      String
+  contentEntryId String
+  isPrimary      Boolean  @default(false)
+  position       Int      @default(0)
+  isVisible      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  section      Section      @relation(fields: [sectionId, siteId], references: [id, siteId], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+
+  @@unique([sectionId, contentEntryId])
+  @@index([siteId, sectionId, isVisible, position, id])
+  @@index([siteId, contentEntryId, isPrimary])
+}
+
+model SectionRoleAssignment {
+  id          String   @id @default(uuid())
+  siteId      String
+  sectionId   String
+  userId      String
+  roleKey     String
+  grantedById String?
+  createdAt   DateTime @default(now())
+
+  site      Site    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  section   Section @relation(fields: [sectionId, siteId], references: [id, siteId], onDelete: Cascade)
+  user      User    @relation("SectionRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      Role    @relation(fields: [roleKey], references: [key], onDelete: Restrict)
+  grantedBy User?   @relation("SectionRoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([sectionId, userId, roleKey])
+  @@index([siteId, sectionId, userId])
+  @@index([userId, siteId])
+  @@index([roleKey])
+  @@index([grantedById])
+}
+
+model Menu {
+  id        String   @id @default(uuid())
+  siteId    String
+  localeId  String
+  key       String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  site   Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale Locale     @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  items  MenuItem[]
+
+  @@unique([id, siteId])
+  @@unique([siteId, localeId, key])
+  @@index([siteId, localeId, createdAt, id])
+}
+
+model MenuItem {
+  id          String           @id @default(uuid())
+  siteId      String
+  menuId      String
+  parentId    String?
+  label       String
+  position    Int              @default(0)
+  isVisible   Boolean          @default(true)
+  linkType    MenuItemLinkType
+  routeId     String?
+  externalUrl String?          @db.VarChar(2048)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  site     Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  menu     Menu       @relation(fields: [menuId, siteId], references: [id, siteId], onDelete: Cascade)
+  parent   MenuItem?  @relation("MenuItemHierarchy", fields: [parentId, menuId], references: [id, menuId], onDelete: Cascade)
+  children MenuItem[] @relation("MenuItemHierarchy")
+  route    Route?     @relation(fields: [routeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([id, menuId])
+  @@index([siteId, menuId, parentId, isVisible, position, id])
+  @@index([siteId, routeId])
+}
+
+model RoutingPath {
+  id        String          @id @default(uuid())
+  siteId    String
+  localeId  String
+  path      String          @db.VarChar(1024)
+  kind      RoutingPathKind
+  createdAt DateTime        @default(now())
+
+  site     Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale   Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  route    Route?
+  alias    RouteAlias?
+  redirect Redirect?
+
+  @@unique([id, siteId, localeId])
+  @@unique([siteId, localeId, path])
+  @@index([siteId, localeId, kind, createdAt, id])
+}
+
+model Route {
+  id             String   @id @default(uuid())
+  siteId         String
+  localeId       String
+  pathId         String   @unique
+  contentEntryId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale       Locale        @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  path         RoutingPath   @relation(fields: [pathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Restrict)
+  contentEntry ContentEntry? @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Restrict)
+  aliases      RouteAlias[]
+  menuItems    MenuItem[]
+
+  @@unique([id, siteId])
+  @@unique([id, siteId, localeId])
+  @@unique([pathId, siteId, localeId])
+  @@index([siteId, localeId, createdAt, id])
+  @@index([siteId, contentEntryId])
+}
+
+model RouteAlias {
+  id        String   @id @default(uuid())
+  siteId    String
+  localeId  String
+  pathId    String   @unique
+  routeId   String
+  createdAt DateTime @default(now())
+
+  site   Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  path   RoutingPath @relation(fields: [pathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+  route  Route       @relation(fields: [routeId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+
+  @@unique([pathId, siteId, localeId])
+  @@index([siteId, localeId, routeId, createdAt])
+}
+
+model Redirect {
+  id           String   @id @default(uuid())
+  siteId       String
+  localeId     String
+  sourcePathId String   @unique
+  targetPath   String   @db.VarChar(1024)
+  statusCode   Int      @default(301)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  locale     Locale      @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+  sourcePath RoutingPath @relation(fields: [sourcePathId, siteId, localeId], references: [id, siteId, localeId], onDelete: Cascade)
+
+  @@unique([sourcePathId, siteId, localeId])
+  @@index([siteId, localeId, createdAt, id])
 }
 
 model ContentType {
@@ -256,11 +476,67 @@ model ContentEntry {
   editorialComments        ContentEntryComment[]
   editorialReviews         ContentEntryReview[]
   snapshots                ContentEntrySnapshot[]
+  placements               ContentPlacement[]
+  routes                   Route[]
+  publishedProjections     PublishedContentEntry[]
+  publicationSchedules     PublicationSchedule[]
+  assetRelations           ContentAssetRelation[]
+  previewTokens            ContentPreviewToken[]
 
   @@unique([id, siteId])
   @@index([siteId, contentTypeId, updatedAt])
   @@index([siteId, contentTypeId, status, publishedAt(sort: Desc), id(sort: Desc)])
   @@index([siteId, status, updatedAt])
+}
+
+model Asset {
+  id             String      @id @default(uuid())
+  siteId         String
+  createdById    String
+  status         AssetStatus @default(READY)
+  originalName   String      @db.VarChar(255)
+  displayName    String      @db.VarChar(255)
+  altText        String?     @db.VarChar(500)
+  mimeType       String      @db.VarChar(127)
+  extension      String      @db.VarChar(16)
+  sizeBytes      Int
+  checksumSha256 String      @db.Char(64)
+  storageKey     String      @unique @db.VarChar(500)
+  version        Int         @default(1)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  site             Site                   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  createdBy        User                   @relation("AssetCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  contentRelations ContentAssetRelation[]
+
+  @@unique([id, siteId])
+  @@index([siteId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([siteId, mimeType, createdAt(sort: Desc)])
+  @@index([checksumSha256])
+}
+
+model ContentAssetRelation {
+  id             String   @id @default(uuid())
+  siteId         String
+  contentEntryId String
+  assetId        String
+  localeId       String
+  role           String   @db.VarChar(63)
+  position       Int      @default(0)
+  title          String?  @db.VarChar(255)
+  description    String?  @db.VarChar(1000)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  asset        Asset        @relation(fields: [assetId, siteId], references: [id, siteId], onDelete: Restrict)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([contentEntryId, localeId, role, position])
+  @@index([assetId, siteId, createdAt(sort: Desc)])
+  @@index([contentEntryId, siteId, role, position])
 }
 
 model ContentEntryAssignment {
@@ -337,6 +613,28 @@ model ContentEntrySnapshot {
   @@index([siteId, createdAt(sort: Desc), id(sort: Desc)])
 }
 
+model ContentPreviewToken {
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique @db.Char(64)
+  siteId         String
+  contentEntryId String
+  localeId       String
+  revision       Int
+  createdById    String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Cascade)
+  createdBy    User         @relation("ContentPreviewTokenCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([siteId, contentEntryId, revision])
+  @@index([createdById, createdAt(sort: Desc)])
+}
+
 model ContentLocale {
   id             String   @id @default(uuid())
   siteId         String
@@ -353,6 +651,71 @@ model ContentLocale {
 
   @@unique([contentEntryId, localeId])
   @@index([siteId, localeId, updatedAt])
+}
+
+model PublishedContentEntry {
+  id                String   @id @default(uuid())
+  siteId            String
+  contentEntryId    String
+  localeId          String
+  contentTypeKey    String
+  localeCode        String
+  data              Json     @default("{}")
+  schemaVersion     Int
+  editorialRevision Int
+  publishedAt       DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  locale       Locale       @relation(fields: [localeId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([contentEntryId, localeId])
+  @@index([siteId, contentTypeKey, localeCode, publishedAt(sort: Desc), contentEntryId(sort: Desc)])
+  @@index([siteId, localeId, updatedAt])
+}
+
+model PublicationSchedule {
+  id             String                    @id @default(uuid())
+  commandId      String                    @unique
+  siteId         String
+  contentEntryId String
+  requestedById  String?
+  action         PublicationAction
+  status         PublicationScheduleStatus @default(PENDING)
+  scheduledFor   DateTime
+  claimedAt      DateTime?
+  completedAt    DateTime?
+  failureCode    String?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  contentEntry ContentEntry @relation(fields: [contentEntryId, siteId], references: [id, siteId], onDelete: Cascade)
+  requestedBy  User?        @relation("PublicationScheduleRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@unique([id, siteId])
+  @@index([status, scheduledFor, id])
+  @@index([siteId, contentEntryId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model DomainEvent {
+  id            String    @id @default(uuid())
+  siteId        String
+  aggregateType String
+  aggregateId   String
+  type          String
+  revision      Int
+  payload       Json      @default("{}")
+  occurredAt    DateTime  @default(now())
+  publishedAt   DateTime?
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([aggregateId, type, revision])
+  @@index([publishedAt, occurredAt, id])
+  @@index([siteId, aggregateType, aggregateId, occurredAt(sort: Desc)])
 }
 
 model AuditEvent {

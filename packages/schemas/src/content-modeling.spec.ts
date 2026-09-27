@@ -10,12 +10,23 @@ import {
   contentEntryStatusUpdateSchema,
   contentEntryTransitionAuditMetadataSchema,
   contentEntryWorkflowTransitions,
+  contentPlacementUpdateSchema,
   contentSchemaVersionSchema,
   contentTypeCreateSchema,
   contentTypeKeySchema,
   contentTypeSchemaDefinitionSchema,
   fieldDefinitionSchema,
   findContentEntryWorkflowTransition,
+  menuCreateSchema,
+  menuItemWriteSchema,
+  redirectCreateSchema,
+  publicationScheduleCreateSchema,
+  routeCreateSchema,
+  routePathSchema,
+  routeUpdateSchema,
+  sectionCreateSchema,
+  sectionRoleAssignmentCreateSchema,
+  sectionUpdateSchema,
 } from "./index.js";
 
 describe("content modeling contracts", () => {
@@ -271,6 +282,114 @@ describe("content modeling contracts", () => {
       contentEntryReviewCreateSchema.safeParse({
         decision: "APPROVED",
         note: "x".repeat(4_001),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates sections, placements, and section-scoped roles", () => {
+    const sectionId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    const userId = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
+
+    expect(sectionCreateSchema.parse({ key: "latest-news", name: " Latest news " })).toEqual({
+      key: "latest-news",
+      name: "Latest news",
+      parentId: null,
+    });
+    expect(sectionCreateSchema.safeParse({ key: "Latest News", name: "News" }).success).toBe(false);
+    expect(sectionUpdateSchema.parse({ name: "Local", parentId: sectionId })).toEqual({
+      name: "Local",
+      parentId: sectionId,
+    });
+    expect(contentPlacementUpdateSchema.parse({ isPrimary: true, position: 4 })).toEqual({
+      isPrimary: true,
+      isVisible: true,
+      position: 4,
+    });
+    expect(contentPlacementUpdateSchema.safeParse({ position: -1 }).success).toBe(false);
+    expect(sectionRoleAssignmentCreateSchema.parse({ roleKey: "editor", userId })).toEqual({
+      roleKey: "editor",
+      userId,
+    });
+    expect(sectionRoleAssignmentCreateSchema.safeParse({ roleKey: "owner", userId }).success).toBe(
+      false,
+    );
+  });
+
+  it("validates navigation targets and normalized route paths", () => {
+    const localeId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    const routeId = "2ec3cb32-e8c8-4c64-ad0f-8689e39a06a6";
+
+    expect(menuCreateSchema.parse({ key: "main", localeId, name: " Principal " })).toEqual({
+      key: "main",
+      localeId,
+      name: "Principal",
+    });
+    expect(routePathSchema.safeParse("/noticias/institucional").success).toBe(true);
+    expect(routePathSchema.safeParse("/Noticias?draft=true").success).toBe(false);
+    expect(
+      menuItemWriteSchema.parse({ label: "Início", linkType: "INTERNAL", routeId }),
+    ).toMatchObject({ externalUrl: null, isVisible: true, routeId });
+    expect(
+      menuItemWriteSchema.safeParse({
+        externalUrl: "https://example.com",
+        label: "Inválido",
+        linkType: "INTERNAL",
+        routeId,
+      }).success,
+    ).toBe(false);
+    expect(
+      menuItemWriteSchema.parse({
+        externalUrl: "https://example.com",
+        label: "Externo",
+        linkType: "EXTERNAL",
+      }),
+    ).toMatchObject({ externalUrl: "https://example.com", routeId: null });
+    expect(
+      menuItemWriteSchema.safeParse({
+        externalUrl: "javascript:alert(1)",
+        label: "Inseguro",
+        linkType: "EXTERNAL",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates route and redirect contracts", () => {
+    const localeId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    expect(routeCreateSchema.parse({ localeId, path: "/sobre" })).toEqual({
+      contentEntryId: null,
+      localeId,
+      path: "/sobre",
+    });
+    expect(routeUpdateSchema.safeParse({ contentEntryId: null, path: "/nova-rota" }).success).toBe(
+      true,
+    );
+    expect(
+      redirectCreateSchema.parse({ localeId, sourcePath: "/antiga", targetPath: "/nova" }),
+    ).toMatchObject({ statusCode: 301 });
+    expect(
+      redirectCreateSchema.safeParse({ localeId, sourcePath: "/igual", targetPath: "/igual" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("validates publication schedules with explicit idempotency commands", () => {
+    const commandId = "a11f740b-f15f-4279-8ca2-3877a4cae775";
+    expect(
+      publicationScheduleCreateSchema.parse({
+        action: "PUBLISH",
+        commandId,
+        scheduledFor: "2026-09-26T10:00:00-03:00",
+      }),
+    ).toEqual({
+      action: "PUBLISH",
+      commandId,
+      scheduledFor: new Date("2026-09-26T13:00:00.000Z"),
+    });
+    expect(
+      publicationScheduleCreateSchema.safeParse({
+        action: "DELETE",
+        commandId,
+        scheduledFor: "tomorrow",
       }).success,
     ).toBe(false);
   });

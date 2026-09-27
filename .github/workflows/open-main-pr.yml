@@ -2,7 +2,14 @@ name: Abrir PR para Main
 
 on:
   push:
-    branches: [develop]
+    tags:
+      - "promote/**"
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: "Milestone ou release aprovado para promoção"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -33,7 +40,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MILESTONE_INPUT: ${{ inputs.milestone || github.ref_name }}
         run: |
+          milestone="${MILESTONE_INPUT#promote/}"
           head_sha="$(git rev-parse HEAD)"
           head_ref="$REPOSITORY_OWNER:develop"
 
@@ -62,13 +71,15 @@ jobs:
           cat > /tmp/nexora-promotion-body.md <<'EOF'
           ## Resumo
 
-          - promover para `main` as alterações aprovadas e mescladas manualmente em `develop`.
+          - promover para `main` as alterações aprovadas e mescladas manualmente em `develop` para o milestone/release solicitado.
 
           ## Validação
 
-          - PR criado automaticamente após o merge manual em `develop`;
+          - PR criado automaticamente após o acionamento explícito da promoção do milestone/release;
           - merge em `main` permanece manual e protegido pelos checks obrigatórios.
           EOF
+
+          printf '\n## Milestone/release\n\n- %s\n' "$milestone" >> /tmp/nexora-promotion-body.md
 
           set +e
           create_output="$(
@@ -76,7 +87,7 @@ jobs:
               --repo "$REPOSITORY" \
               --base main \
               --head develop \
-              --title "chore: promover develop para main" \
+              --title "chore: promover $milestone para main" \
               --body-file /tmp/nexora-promotion-body.md 2>&1
           )"
           create_status="$?"

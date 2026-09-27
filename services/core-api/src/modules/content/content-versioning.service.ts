@@ -120,6 +120,30 @@ export class ContentVersioningService {
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
   ) {}
 
+  async listRevisions(siteId: string, contentEntryId: string) {
+    const entry = await this.prisma.contentEntry.findUnique({
+      select: { id: true },
+      where: { id_siteId: { id: contentEntryId, siteId } },
+    });
+    if (!entry) {
+      throw new ContentEntryNotFoundError();
+    }
+
+    return this.prisma.contentEntrySnapshot.findMany({
+      orderBy: { revision: "desc" },
+      select: {
+        actorId: true,
+        createdAt: true,
+        publishedAt: true,
+        revision: true,
+        schemaVersion: true,
+        status: true,
+      },
+      take: 100,
+      where: { contentEntryId, siteId },
+    });
+  }
+
   async compareRevisions(
     siteId: string,
     contentEntryId: string,

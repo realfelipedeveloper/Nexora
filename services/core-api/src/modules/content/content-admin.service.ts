@@ -17,10 +17,16 @@ import {
 import { InjectPrismaClient } from "../../database/database.module.js";
 import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
+import { ContentAssetRelationService } from "./content-asset-relation.service.js";
 import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { contentEntryTransitionAuditData } from "./content-transition-audit.js";
 import { canSetContentWorkflowState } from "./content-workflow-authorization.js";
+import {
+  createPublicationEvent,
+  removePublishedProjection,
+  replacePublishedProjection,
+} from "./publication-projection.js";
 
 const defaultPageSize = 25;
 const maximumPageSize = 100;
@@ -81,6 +87,12 @@ const contentEntrySummarySelection = {
   updatedAt: true,
 } as const;
 
+const contentPlacementOrder: Prisma.ContentPlacementOrderByWithRelationInput[] = [
+  { isPrimary: "desc" },
+  { position: "asc" },
+  { id: "asc" },
+];
+
 const contentEntryDetailSelection = {
   ...contentEntrySummarySelection,
   contentLocales: {
@@ -93,6 +105,17 @@ const contentEntryDetailSelection = {
       localeId: true,
       revision: true,
       schemaVersion: true,
+      updatedAt: true,
+    },
+  },
+  placements: {
+    orderBy: contentPlacementOrder,
+    select: {
+      id: true,
+      isPrimary: true,
+      isVisible: true,
+      position: true,
+      section: { select: { id: true, key: true, name: true } },
       updatedAt: true,
     },
   },
@@ -277,7 +300,41 @@ export class ContentAdminService {
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentFieldValidator) private readonly validator: ContentFieldValidator,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
+    @Inject(ContentAssetRelationService)
+    private readonly assetRelations: ContentAssetRelationService,
   ) {}
+
+  async getEditorialContext(siteId: string) {
+    const [locales, members] = await Promise.all([
+      this.prisma.locale.findMany({
+        orderBy: [{ isDefault: "desc" }, { code: "asc" }],
+        select: { code: true, id: true, isDefault: true },
+        take: 100,
+        where: { siteId },
+      }),
+      this.prisma.user.findMany({
+        orderBy: [{ displayName: "asc" }, { id: "asc" }],
+        select: { displayName: true, id: true },
+        take: 100,
+        where: {
+          OR: [
+            { isSystemAdmin: true },
+            {
+              siteRoleAssignments: {
+                some: {
+                  role: { permissions: { some: { permissionKey: "content.write" } } },
+                  siteId,
+                },
+              },
+            },
+          ],
+          status: "ACTIVE",
+        },
+      }),
+    ]);
+
+    return { locales, members };
+  }
 
   async listContentTypes(siteId: string, input: ContentPageInput) {
     const page = parsePage(input);
@@ -538,6 +595,13 @@ export class ContentAdminService {
         },
         select: contentEntryDetailSelection,
       });
+      await this.assetRelations.synchronize(
+        transaction,
+        siteId,
+        entry.id,
+        locales,
+        schema.definition,
+      );
       await createContentEntrySnapshot(transaction, actorId, siteId, entry.id);
       await transaction.auditEvent.create({
         data: {
@@ -628,6 +692,13 @@ export class ContentAdminService {
           },
         });
       }
+      await this.assetRelations.synchronize(
+        transaction,
+        siteId,
+        contentEntryId,
+        locales,
+        schema.definition,
+      );
       const entry = await transaction.contentEntry.findUniqueOrThrow({
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
@@ -665,23 +736,34 @@ export class ContentAdminService {
 
     const result = await this.prisma.$transaction(async (transaction) => {
       const current = await transaction.contentEntry.findUnique({
-        select: { id: true, revision: true, status: true },
+        select: { id: true, publishedAt: true, revision: true, status: true },
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
       if (!current) {
         throw new ContentEntryNotFoundError();
       }
-      if (current.revision !== expectedRevision) {
-        this.preconditionFailed();
-      }
       if (current.status === command.status) {
         if (!canSetContentWorkflowState(access, siteId, current.status, command.status)) {
           throw new ContentEntryTransitionForbiddenError();
+        }
+        if (current.status === "PUBLISHED" && current.publishedAt) {
+          await replacePublishedProjection(
+            transaction,
+            siteId,
+            contentEntryId,
+            current.publishedAt,
+            current.revision,
+          );
+        } else if (current.status !== "PUBLISHED") {
+          await removePublishedProjection(transaction, siteId, contentEntryId);
         }
         return transaction.contentEntry.findUniqueOrThrow({
           select: contentEntryDetailSelection,
           where: { id_siteId: { id: contentEntryId, siteId } },
         });
+      }
+      if (current.revision !== expectedRevision) {
+        this.preconditionFailed();
       }
       const workflowTransition = findContentEntryWorkflowTransition(current.status, command.status);
       if (!workflowTransition) {
@@ -715,12 +797,55 @@ export class ContentAdminService {
         where: { id: contentEntryId, revision: expectedRevision, siteId },
       });
       if (changed.count !== 1) {
+        const converged = await transaction.contentEntry.findUnique({
+          select: contentEntryDetailSelection,
+          where: { id_siteId: { id: contentEntryId, siteId } },
+        });
+        if (converged?.status === command.status) {
+          if (converged.status === "PUBLISHED" && converged.publishedAt) {
+            await replacePublishedProjection(
+              transaction,
+              siteId,
+              contentEntryId,
+              converged.publishedAt,
+              converged.revision,
+            );
+          } else {
+            await removePublishedProjection(transaction, siteId, contentEntryId);
+          }
+          return converged;
+        }
         this.preconditionFailed();
       }
       const entry = await transaction.contentEntry.findUniqueOrThrow({
         select: contentEntryDetailSelection,
         where: { id_siteId: { id: contentEntryId, siteId } },
       });
+      if (command.status === "PUBLISHED" && entry.publishedAt) {
+        await replacePublishedProjection(
+          transaction,
+          siteId,
+          contentEntryId,
+          entry.publishedAt,
+          revision,
+        );
+        await createPublicationEvent(transaction, {
+          contentEntryId,
+          publishedAt: entry.publishedAt,
+          revision,
+          siteId,
+          type: "content.published",
+        });
+      } else if (current.status === "PUBLISHED") {
+        await removePublishedProjection(transaction, siteId, contentEntryId);
+        await createPublicationEvent(transaction, {
+          contentEntryId,
+          publishedAt: null,
+          revision,
+          siteId,
+          type: "content.unpublished",
+        });
+      }
       await createContentEntrySnapshot(transaction, actorId, siteId, contentEntryId);
       await transaction.auditEvent.create({
         data: contentEntryTransitionAuditData({
@@ -737,6 +862,11 @@ export class ContentAdminService {
     });
     if (transition) {
       this.metrics.recordStateTransition(transition.from, transition.to);
+      if (transition.action === "PUBLISH") {
+        this.metrics.recordPublicationOperation("published");
+      } else if (transition.action === "UNPUBLISH" || transition.action === "ARCHIVE") {
+        this.metrics.recordPublicationOperation("unpublished");
+      }
     }
     return result;
   }

@@ -10,6 +10,43 @@ type ContentRevisionRestorationOutcome =
   | "not_found"
   | "precondition_failed"
   | "success";
+type SectionMutation =
+  | "placement_deleted"
+  | "placement_saved"
+  | "role_granted"
+  | "role_revoked"
+  | "section_created"
+  | "section_deleted"
+  | "section_updated";
+type NavigationMutation =
+  | "item_created"
+  | "item_deleted"
+  | "item_updated"
+  | "menu_created"
+  | "menu_deleted"
+  | "menu_updated"
+  | "redirect_created"
+  | "redirect_deleted"
+  | "route_created"
+  | "route_deleted"
+  | "route_updated";
+type RoutingResolution = "alias" | "menu" | "redirect" | "route";
+type PublicationOperation =
+  | "cancelled"
+  | "published"
+  | "schedule_failed"
+  | "scheduled"
+  | "scheduled_published"
+  | "scheduled_unpublished"
+  | "unpublished";
+type MediaOperation = "deleted" | "downloaded" | "rejected" | "uploaded" | "updated";
+type PreviewOperation =
+  | "asset_miss"
+  | "asset_read"
+  | "issue_miss"
+  | "issued"
+  | "redeem_miss"
+  | "redeemed";
 
 @Injectable()
 export class ContentMetrics {
@@ -19,6 +56,12 @@ export class ContentMetrics {
   private readonly revisionComparisons = new Map<ContentRevisionComparisonOutcome, number>();
   private readonly revisionRestorations = new Map<ContentRevisionRestorationOutcome, number>();
   private readonly reviewDecisions = new Map<ContentEntryReviewDecision, number>();
+  private readonly sectionMutations = new Map<SectionMutation, number>();
+  private readonly navigationMutations = new Map<NavigationMutation, number>();
+  private readonly routingResolutions = new Map<RoutingResolution, number>();
+  private readonly publicationOperations = new Map<PublicationOperation, number>();
+  private readonly mediaOperations = new Map<MediaOperation, number>();
+  private readonly previewOperations = new Map<PreviewOperation, number>();
   private readonly stateTransitions = new Map<string, number>();
 
   recordPreconditionFailure() {
@@ -39,6 +82,30 @@ export class ContentMetrics {
 
   recordReviewDecision(decision: ContentEntryReviewDecision) {
     this.reviewDecisions.set(decision, (this.reviewDecisions.get(decision) ?? 0) + 1);
+  }
+
+  recordSectionMutation(operation: SectionMutation) {
+    this.sectionMutations.set(operation, (this.sectionMutations.get(operation) ?? 0) + 1);
+  }
+
+  recordNavigationMutation(operation: NavigationMutation) {
+    this.navigationMutations.set(operation, (this.navigationMutations.get(operation) ?? 0) + 1);
+  }
+
+  recordRoutingResolution(result: RoutingResolution) {
+    this.routingResolutions.set(result, (this.routingResolutions.get(result) ?? 0) + 1);
+  }
+
+  recordPublicationOperation(operation: PublicationOperation) {
+    this.publicationOperations.set(operation, (this.publicationOperations.get(operation) ?? 0) + 1);
+  }
+
+  recordMediaOperation(operation: MediaOperation) {
+    this.mediaOperations.set(operation, (this.mediaOperations.get(operation) ?? 0) + 1);
+  }
+
+  recordPreviewOperation(operation: PreviewOperation) {
+    this.previewOperations.set(operation, (this.previewOperations.get(operation) ?? 0) + 1);
   }
 
   recordRevisionComparison(outcome: ContentRevisionComparisonOutcome) {
@@ -85,6 +152,30 @@ export class ContentMetrics {
     lines.push("# TYPE nexora_content_review_decisions_total counter");
     for (const [decision, count] of [...this.reviewDecisions.entries()].sort()) {
       lines.push(`nexora_content_review_decisions_total{decision="${decision}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_section_mutations_total counter");
+    for (const [operation, count] of [...this.sectionMutations.entries()].sort()) {
+      lines.push(`nexora_section_mutations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_navigation_mutations_total counter");
+    for (const [operation, count] of [...this.navigationMutations.entries()].sort()) {
+      lines.push(`nexora_navigation_mutations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_routing_resolutions_total counter");
+    for (const [result, count] of [...this.routingResolutions.entries()].sort()) {
+      lines.push(`nexora_routing_resolutions_total{result="${result}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_publication_operations_total counter");
+    for (const [operation, count] of [...this.publicationOperations.entries()].sort()) {
+      lines.push(`nexora_publication_operations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_media_operations_total counter");
+    for (const [operation, count] of [...this.mediaOperations.entries()].sort()) {
+      lines.push(`nexora_media_operations_total{operation="${operation}"} ${count}`);
+    }
+    lines.push("# TYPE nexora_content_preview_operations_total counter");
+    for (const [operation, count] of [...this.previewOperations.entries()].sort()) {
+      lines.push(`nexora_content_preview_operations_total{operation="${operation}"} ${count}`);
     }
     lines.push("# TYPE nexora_content_state_transitions_total counter");
     for (const [transition, count] of [...this.stateTransitions.entries()].sort()) {

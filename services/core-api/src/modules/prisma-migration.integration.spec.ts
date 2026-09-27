@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { platform } from "node:os";
 import path from "node:path";
@@ -23,8 +24,18 @@ import {
 } from "./content/content-admin.service.js";
 import { ContentCollaborationController } from "./content/content-collaboration.controller.js";
 import { ContentCollaborationService } from "./content/content-collaboration.service.js";
+import { ContentAssetRelationService } from "./content/content-asset-relation.service.js";
 import { ContentFieldValidator } from "./content/content-field-validator.js";
 import { ContentMetrics } from "./content/content-metrics.js";
+import {
+  ContentPreviewNotFoundError,
+  ContentPreviewService,
+} from "./content/content-preview.service.js";
+import {
+  NavigationConflictError,
+  NavigationRoutingService,
+} from "./content/navigation-routing.service.js";
+import { PublicationSchedulerService } from "./content/publication-scheduler.service.js";
 import { PublicContentController } from "./content/content-public.controller.js";
 import { PublicContentService } from "./content/content-public.service.js";
 import { ContentVersioningController } from "./content/content-versioning.controller.js";
@@ -223,15 +234,21 @@ describe("PostgreSQL migrations and integration", () => {
     expect(tableList.output.split(/\s+/).filter(Boolean)).toEqual(
       expect.arrayContaining([
         "AuditEvent",
+        "Asset",
+        "ContentAssetRelation",
         "ContentEntry",
         "ContentEntrySnapshot",
+        "ContentPreviewToken",
         "ContentLocale",
         "ContentType",
         "ContentTypeSchemaVersion",
+        "DomainEvent",
         "FieldDefinition",
         "GlobalSetting",
         "Locale",
         "Permission",
+        "PublicationSchedule",
+        "PublishedContentEntry",
         "Role",
         "RolePermission",
         "Section",
@@ -513,6 +530,12 @@ describe("PostgreSQL migrations and integration", () => {
           data: { key: "blank-name", name: "   ", siteId: firstSite.id },
         }),
       ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.section.update({
+          data: { parentId: grandchild.id },
+          where: { id: root.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
       await expect(prisma.section.delete({ where: { id: root.id } })).rejects.toMatchObject({
         code: "P2003",
       });
@@ -520,6 +543,132 @@ describe("PostgreSQL migrations and integration", () => {
       await prisma.site.delete({ where: { id: firstSite.id } });
       await expect(prisma.section.count({ where: { siteId: firstSite.id } })).resolves.toBe(0);
       await expect(prisma.section.count({ where: { siteId: secondSite.id } })).resolves.toBe(1);
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("enforces content placement, primary section, ordering, visibility, and section RBAC", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+
+    try {
+      const [firstSite, secondSite] = await Promise.all([
+        prisma.site.create({ data: { key: "placement-first", name: "Placement First" } }),
+        prisma.site.create({ data: { key: "placement-second", name: "Placement Second" } }),
+      ]);
+      const [firstSection, secondSection, invalidSection, foreignSection] = await Promise.all([
+        prisma.section.create({ data: { key: "news", name: "News", siteId: firstSite.id } }),
+        prisma.section.create({
+          data: { key: "featured", name: "Featured", siteId: firstSite.id },
+        }),
+        prisma.section.create({ data: { key: "invalid", name: "Invalid", siteId: firstSite.id } }),
+        prisma.section.create({ data: { key: "news", name: "News", siteId: secondSite.id } }),
+      ]);
+      const contentType = await prisma.contentType.create({
+        data: {
+          displayName: "Placement Article",
+          key: "placement-article",
+          schemaVersions: {
+            create: {
+              definition: {
+                displayName: "Placement Article",
+                fields: [],
+                key: "placement-article",
+                version: 1,
+              },
+              version: 1,
+            },
+          },
+          siteId: firstSite.id,
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, siteId: firstSite.id },
+      });
+
+      const primary = await prisma.contentPlacement.create({
+        data: {
+          contentEntryId: entry.id,
+          isPrimary: true,
+          position: 10,
+          sectionId: firstSection.id,
+          siteId: firstSite.id,
+        },
+      });
+      const secondary = await prisma.contentPlacement.create({
+        data: {
+          contentEntryId: entry.id,
+          isVisible: false,
+          position: 2,
+          sectionId: secondSection.id,
+          siteId: firstSite.id,
+        },
+      });
+
+      await expect(
+        prisma.contentPlacement.findMany({
+          orderBy: [{ position: "asc" }, { id: "asc" }],
+          where: { contentEntryId: entry.id, siteId: firstSite.id },
+        }),
+      ).resolves.toMatchObject([
+        { id: secondary.id, isPrimary: false, isVisible: false, position: 2 },
+        { id: primary.id, isPrimary: true, isVisible: true, position: 10 },
+      ]);
+      await expect(
+        prisma.contentPlacement.update({
+          data: { isPrimary: true },
+          where: { id: secondary.id },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+      await expect(
+        prisma.contentPlacement.create({
+          data: {
+            contentEntryId: entry.id,
+            position: -1,
+            sectionId: invalidSection.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2039" });
+      await expect(
+        prisma.contentPlacement.create({
+          data: {
+            contentEntryId: entry.id,
+            sectionId: foreignSection.id,
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+
+      const user = await prisma.user.create({
+        data: {
+          displayName: "Section Editor",
+          email: "section.editor@example.com",
+          normalizedEmail: "section.editor@example.com",
+          passwordHash: "not-used-by-this-test",
+        },
+      });
+      await expect(
+        prisma.sectionRoleAssignment.create({
+          data: {
+            grantedById: user.id,
+            roleKey: "editor",
+            sectionId: firstSection.id,
+            siteId: firstSite.id,
+            userId: user.id,
+          },
+        }),
+      ).resolves.toMatchObject({ roleKey: "editor", sectionId: firstSection.id });
+      await expect(
+        prisma.sectionRoleAssignment.create({
+          data: {
+            roleKey: "viewer",
+            sectionId: foreignSection.id,
+            siteId: firstSite.id,
+            userId: user.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
     } finally {
       await prisma.$disconnect();
     }
@@ -914,6 +1063,7 @@ describe("PostgreSQL migrations and integration", () => {
       providers: [
         ContentAdminService,
         ContentCollaborationService,
+        ContentAssetRelationService,
         ContentFieldValidator,
         ContentMetrics,
         ContentVersioningService,
@@ -1476,6 +1626,7 @@ describe("PostgreSQL migrations and integration", () => {
       );
       expect(publicDetail.headers.etag).toMatch(/^"sha256-[A-Za-z0-9_-]+"$/u);
       expect(publicDetail.body).toEqual({
+        assets: [],
         contentType: { key: "article" },
         data: { summary: "Updated summary", title: submittedTitle },
         id: createdEntry.body.id,
@@ -1513,7 +1664,7 @@ describe("PostgreSQL migrations and integration", () => {
         .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
         .set("Cookie", publisherSession.cookie)
         .set("x-csrf-token", publisherSession.csrfToken)
-        .set("If-Match", '"4"')
+        .set("If-Match", '"3"')
         .send({ status: "PUBLISHED" })
         .expect(200);
       expect(repeatedPublish.headers.etag).toBe('"4"');
@@ -1559,6 +1710,14 @@ describe("PostgreSQL migrations and integration", () => {
         revision: 5,
         status: "DRAFT",
       });
+      const repeatedUnpublish = await request(app.getHttpServer())
+        .patch(`/sites/${primarySite.id}/content-entries/${createdEntry.body.id as string}/status`)
+        .set("Cookie", publisherSession.cookie)
+        .set("x-csrf-token", publisherSession.csrfToken)
+        .set("If-Match", '"4"')
+        .send({ status: "DRAFT" })
+        .expect(200);
+      expect(repeatedUnpublish.body).toMatchObject({ revision: 5, status: "DRAFT" });
 
       await request(app.getHttpServer())
         .get(
@@ -2420,7 +2579,12 @@ describe("PostgreSQL migrations and integration", () => {
       siteId: site.id,
     } satisfies SiteAccess;
     const metrics = new ContentMetrics();
-    const service = new ContentAdminService(prisma, new ContentFieldValidator(), metrics);
+    const service = new ContentAdminService(
+      prisma,
+      new ContentFieldValidator(),
+      metrics,
+      new ContentAssetRelationService(),
+    );
     const createEntry = () =>
       prisma.contentEntry.create({
         data: {
@@ -2443,12 +2607,8 @@ describe("PostgreSQL migrations and integration", () => {
           status: "IN_REVIEW",
         }),
       ]);
-      expect(identicalAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
-      expect(identicalAttempts.filter(({ status }) => status === "rejected")).toHaveLength(1);
-      expect(
-        (identicalAttempts.find(({ status }) => status === "rejected") as PromiseRejectedResult)
-          .reason,
-      ).toBeInstanceOf(ContentPreconditionFailedError);
+      expect(identicalAttempts.filter(({ status }) => status === "fulfilled")).toHaveLength(2);
+      expect(identicalAttempts.filter(({ status }) => status === "rejected")).toHaveLength(0);
       await expect(
         prisma.contentEntry.findUniqueOrThrow({ where: { id: identicalEntry.id } }),
       ).resolves.toMatchObject({ revision: 2, status: "IN_REVIEW" });
@@ -2526,8 +2686,140 @@ describe("PostgreSQL migrations and integration", () => {
         { revision: 2, status: "IN_REVIEW" },
         { revision: 3, status: finalEntry.status },
       ]);
-      expect(metrics.render()).toContain("nexora_content_precondition_failures_total 2");
+      expect(metrics.render()).toContain("nexora_content_precondition_failures_total 1");
     } finally {
+      await prisma.$disconnect();
+    }
+  });
+
+  it("enforces site-isolated asset relations and blocks deletion while in use", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const suffix = randomUUID();
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Media editor",
+        email: `media-${suffix}@example.com`,
+        normalizedEmail: `media-${suffix}@example.com`,
+        passwordHash: "not-used-in-this-test",
+      },
+    });
+    const firstSite = await prisma.site.create({
+      data: { key: `media-a-${suffix}`, name: "Media A" },
+    });
+    const secondSite = await prisma.site.create({
+      data: { key: `media-b-${suffix}`, name: "Media B" },
+    });
+
+    try {
+      const locale = await prisma.locale.create({
+        data: { code: "en", isDefault: true, siteId: firstSite.id },
+      });
+      const contentType = await prisma.contentType.create({
+        data: {
+          displayName: "Article",
+          fields: { create: { config: {}, fieldType: "media", key: "cover", label: "Cover" } },
+          key: "article",
+          schemaVersions: {
+            create: {
+              definition: {
+                displayName: "Article",
+                fields: [
+                  {
+                    config: {},
+                    fieldType: "media",
+                    key: "cover",
+                    label: "Cover",
+                    position: 0,
+                    required: false,
+                  },
+                ],
+                key: "article",
+                version: 1,
+              },
+              version: 1,
+            },
+          },
+          siteId: firstSite.id,
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: {
+          contentLocales: { create: { data: {}, localeId: locale.id, schemaVersion: 1 } },
+          contentTypeId: contentType.id,
+          schemaVersion: 1,
+          siteId: firstSite.id,
+        },
+      });
+      const asset = await prisma.asset.create({
+        data: {
+          checksumSha256: "a".repeat(64),
+          createdById: user.id,
+          displayName: "cover.png",
+          extension: "png",
+          mimeType: "image/png",
+          originalName: "cover.png",
+          siteId: firstSite.id,
+          sizeBytes: 128,
+          storageKey: `${firstSite.id}/cover.png`,
+        },
+      });
+      const foreignAsset = await prisma.asset.create({
+        data: {
+          checksumSha256: "b".repeat(64),
+          createdById: user.id,
+          displayName: "foreign.png",
+          extension: "png",
+          mimeType: "image/png",
+          originalName: "foreign.png",
+          siteId: secondSite.id,
+          sizeBytes: 128,
+          storageKey: `${secondSite.id}/foreign.png`,
+        },
+      });
+
+      await prisma.contentAssetRelation.create({
+        data: {
+          assetId: asset.id,
+          contentEntryId: entry.id,
+          localeId: locale.id,
+          role: "cover",
+          siteId: firstSite.id,
+        },
+      });
+      await expect(prisma.asset.delete({ where: { id: asset.id } })).rejects.toMatchObject({
+        code: "P2003",
+      });
+      await expect(
+        prisma.contentAssetRelation.create({
+          data: {
+            assetId: foreignAsset.id,
+            contentEntryId: entry.id,
+            localeId: locale.id,
+            position: 1,
+            role: "cover",
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+      await expect(
+        prisma.asset.create({
+          data: {
+            checksumSha256: "c".repeat(64),
+            createdById: user.id,
+            displayName: "empty.pdf",
+            extension: "pdf",
+            mimeType: "application/pdf",
+            originalName: "empty.pdf",
+            siteId: firstSite.id,
+            sizeBytes: 0,
+            storageKey: `${firstSite.id}/empty.pdf`,
+          },
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      await prisma.contentEntry.deleteMany({ where: { siteId: firstSite.id } });
+      await prisma.site.deleteMany({ where: { id: { in: [firstSite.id, secondSite.id] } } });
+      await prisma.user.delete({ where: { id: user.id } });
       await prisma.$disconnect();
     }
   });
@@ -3215,6 +3507,303 @@ describe("PostgreSQL migrations and integration", () => {
     }
   }, 120_000);
 
+  it("enforces isolated navigation, slug history, collisions, and hierarchy loops", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const actor = await prisma.user.create({
+      data: {
+        displayName: "Navigation Editor",
+        email: "navigation.editor@example.com",
+        normalizedEmail: "navigation.editor@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const firstSite = await prisma.site.create({
+      data: { key: "navigation-primary", name: "Navigation Primary" },
+    });
+    const secondSite = await prisma.site.create({
+      data: { key: "navigation-secondary", name: "Navigation Secondary" },
+    });
+    const firstLocale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: firstSite.id },
+    });
+    const secondLocale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: secondSite.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Navigation Page",
+        key: "navigation-page",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Navigation Page",
+              fields: [],
+              key: "navigation-page",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: firstSite.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: { create: { data: { title: "News" }, localeId: firstLocale.id } },
+        contentTypeId: contentType.id,
+        publishedAt: new Date(),
+        siteId: firstSite.id,
+        status: "PUBLISHED",
+      },
+    });
+    await prisma.publishedContentEntry.create({
+      data: {
+        contentEntryId: entry.id,
+        contentTypeKey: contentType.key,
+        data: { title: "News" },
+        editorialRevision: entry.revision,
+        localeCode: firstLocale.code,
+        localeId: firstLocale.id,
+        publishedAt: entry.publishedAt as Date,
+        schemaVersion: entry.schemaVersion,
+        siteId: firstSite.id,
+      },
+    });
+    const metrics = new ContentMetrics();
+    const service = new NavigationRoutingService(prisma, metrics);
+
+    try {
+      const route = await service.createRoute(actor.id, firstSite.id, {
+        contentEntryId: entry.id,
+        localeId: firstLocale.id,
+        path: "/noticias",
+      });
+      const updated = await service.updateRoute(actor.id, firstSite.id, route.id, {
+        contentEntryId: entry.id,
+        path: "/novidades",
+      });
+      expect(updated).toMatchObject({
+        aliases: [{ path: { path: "/noticias" } }],
+        path: { path: "/novidades" },
+      });
+      await expect(
+        service.resolvePublicRoute(firstSite.key, firstLocale.code, "/noticias"),
+      ).resolves.toEqual({ kind: "redirect", location: "/novidades", statusCode: 301 });
+      await expect(
+        service.resolvePublicRoute(firstSite.key, firstLocale.code, "/novidades"),
+      ).resolves.toMatchObject({ contentEntryId: entry.id, kind: "route" });
+
+      await expect(
+        service.createRedirect(actor.id, firstSite.id, {
+          localeId: firstLocale.id,
+          sourcePath: "/novidades",
+          targetPath: "/destino",
+        }),
+      ).rejects.toBeInstanceOf(NavigationConflictError);
+      await service.createRedirect(actor.id, firstSite.id, {
+        localeId: firstLocale.id,
+        sourcePath: "/legado-a",
+        targetPath: "/legado-b",
+      });
+      await expect(
+        service.createRedirect(actor.id, firstSite.id, {
+          localeId: firstLocale.id,
+          sourcePath: "/legado-b",
+          targetPath: "/legado-a",
+        }),
+      ).rejects.toBeInstanceOf(NavigationConflictError);
+
+      const menu = await service.createMenu(actor.id, firstSite.id, {
+        key: "main",
+        localeId: firstLocale.id,
+        name: "Principal",
+      });
+      const parent = await service.createMenuItem(actor.id, firstSite.id, menu.id, {
+        label: "Novidades",
+        linkType: "INTERNAL",
+        routeId: route.id,
+      });
+      const child = await service.createMenuItem(actor.id, firstSite.id, menu.id, {
+        externalUrl: "https://example.com",
+        label: "Externo",
+        linkType: "EXTERNAL",
+        parentId: parent.id,
+      });
+      await expect(
+        prisma.menuItem.update({ data: { parentId: child.id }, where: { id: parent.id } }),
+      ).rejects.toThrow(/menu item hierarchy cycle/iu);
+      await expect(
+        prisma.menu.create({
+          data: {
+            key: "cross-site",
+            localeId: secondLocale.id,
+            name: "Invalid",
+            siteId: firstSite.id,
+          },
+        }),
+      ).rejects.toThrow();
+
+      await expect(
+        service.getPublicMenu(firstSite.key, firstLocale.code, menu.key),
+      ).resolves.toMatchObject({
+        items: [{ children: [{ externalUrl: "https://example.com" }], path: "/novidades" }],
+      });
+      await service.deleteMenu(actor.id, firstSite.id, menu.id);
+      await expect(
+        prisma.menuItem.count({ where: { menuId: menu.id, siteId: firstSite.id } }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.auditEvent.count({
+          where: { actorId: actor.id, entity: { in: ["Menu", "MenuItem", "Redirect", "Route"] } },
+        }),
+      ).resolves.toBe(7);
+      expect(metrics.render()).toContain(
+        'nexora_navigation_mutations_total{operation="route_updated"} 1',
+      );
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("publishes and expires an immutable projection exactly once under concurrent schedulers", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const publisher = await prisma.user.create({
+      data: {
+        displayName: "Scheduled Publisher",
+        email: "scheduled.publisher@example.com",
+        normalizedEmail: "scheduled.publisher@example.com",
+        passwordHash: "not-used-by-this-test",
+      },
+    });
+    const site = await prisma.site.create({
+      data: { key: "scheduled-publication", name: "Scheduled Publication" },
+    });
+    const locale = await prisma.locale.create({
+      data: { code: "pt-BR", isDefault: true, siteId: site.id },
+    });
+    const contentType = await prisma.contentType.create({
+      data: {
+        displayName: "Scheduled Article",
+        key: "scheduled-article",
+        schemaVersions: {
+          create: {
+            definition: {
+              displayName: "Scheduled Article",
+              fields: [{ fieldType: "text", key: "title", required: true }],
+              key: "scheduled-article",
+              version: 1,
+            },
+            version: 1,
+          },
+        },
+        siteId: site.id,
+      },
+    });
+    const entry = await prisma.contentEntry.create({
+      data: {
+        contentLocales: {
+          create: { data: { title: "Published snapshot" }, localeId: locale.id },
+        },
+        contentTypeId: contentType.id,
+        siteId: site.id,
+        status: "IN_REVIEW",
+      },
+    });
+    await prisma.contentEntryReview.create({
+      data: {
+        contentEntryId: entry.id,
+        contentRevision: entry.revision,
+        decision: "APPROVED",
+        reviewerId: publisher.id,
+        siteId: site.id,
+      },
+    });
+    const metrics = new ContentMetrics();
+    const scheduler = new PublicationSchedulerService(prisma, metrics);
+    const publicContent = new PublicContentService(prisma, metrics);
+    const dueAt = new Date(Date.now() - 1_000);
+    const publishCommandId = "10000000-0000-4000-8000-000000000101";
+
+    try {
+      const firstSchedule = await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "PUBLISH",
+        commandId: publishCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      const retriedSchedule = await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "PUBLISH",
+        commandId: publishCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      expect(retriedSchedule.id).toBe(firstSchedule.id);
+      await expect(
+        prisma.publicationSchedule.count({ where: { commandId: publishCommandId } }),
+      ).resolves.toBe(1);
+
+      const competingWorkers = await Promise.all([
+        scheduler.processDue(new Date(), 10),
+        scheduler.processDue(new Date(), 10),
+      ]);
+      expect(competingWorkers.reduce((total, result) => total + result.claimed, 0)).toBe(1);
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).resolves.toMatchObject({ revision: 2, status: "PUBLISHED" });
+      await expect(
+        prisma.publishedContentEntry.findUniqueOrThrow({
+          where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+        }),
+      ).resolves.toMatchObject({
+        data: { title: "Published snapshot" },
+        editorialRevision: 2,
+      });
+
+      await prisma.contentLocale.update({
+        data: { data: { title: "Editorial mutation after publication" } },
+        where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+      });
+      await expect(
+        publicContent.get(site.key, contentType.key, entry.id, locale.code),
+      ).resolves.toMatchObject({ data: { title: "Published snapshot" } });
+
+      const expireCommandId = "10000000-0000-4000-8000-000000000102";
+      await scheduler.create(publisher.id, site.id, entry.id, {
+        action: "UNPUBLISH",
+        commandId: expireCommandId,
+        scheduledFor: dueAt.toISOString(),
+      });
+      await expect(scheduler.processDue(new Date(), 10)).resolves.toMatchObject({ claimed: 1 });
+      await expect(
+        prisma.contentEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).resolves.toMatchObject({ publishedAt: null, revision: 3, status: "DRAFT" });
+      await expect(
+        prisma.publishedContentEntry.count({
+          where: { contentEntryId: entry.id, siteId: site.id },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        publicContent.get(site.key, contentType.key, entry.id, locale.code),
+      ).resolves.toBeNull();
+      await expect(
+        prisma.domainEvent.count({
+          where: {
+            aggregateId: entry.id,
+            type: { in: ["content.published", "content.unpublished"] },
+          },
+        }),
+      ).resolves.toBe(2);
+      const events = await prisma.domainEvent.findMany({ where: { aggregateId: entry.id } });
+      expect(JSON.stringify(events)).not.toContain("Published snapshot");
+      expect(metrics.render()).toContain(
+        'nexora_publication_operations_total{operation="scheduled_published"} 1',
+      );
+      expect(metrics.render()).toContain(
+        'nexora_publication_operations_total{operation="scheduled_unpublished"} 1',
+      );
+    } finally {
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
   it("serves only the explicit public configuration projection with a bounded cache policy", async () => {
     const prisma = createPrismaClient(postgres.getConnectionUri());
     const activeSite = await prisma.site.create({
@@ -3375,6 +3964,116 @@ describe("PostgreSQL migrations and integration", () => {
       }
     } finally {
       await app.close();
+      await prisma.$disconnect();
+    }
+  }, 120_000);
+
+  it("keeps draft preview tokens opaque, revision-bound, expiring, and isolated from publication", async () => {
+    const prisma = createPrismaClient(postgres.getConnectionUri());
+    const metrics = new ContentMetrics();
+    const previews = new ContentPreviewService(prisma, metrics);
+
+    try {
+      const [site, foreignSite] = await Promise.all([
+        prisma.site.create({ data: { key: `preview-${randomUUID()}`, name: "Preview Site" } }),
+        prisma.site.create({
+          data: { key: `preview-foreign-${randomUUID()}`, name: "Foreign Preview Site" },
+        }),
+      ]);
+      const locale = await prisma.locale.create({
+        data: { code: "pt-BR", isDefault: true, siteId: site.id },
+      });
+      const contentType = await prisma.contentType.create({
+        data: { displayName: "Preview Article", key: "preview-article", siteId: site.id },
+      });
+      await prisma.contentTypeSchemaVersion.create({
+        data: {
+          contentTypeId: contentType.id,
+          definition: { displayName: contentType.displayName, fields: [], key: contentType.key },
+          siteId: site.id,
+          version: 1,
+        },
+      });
+      const email = `preview-${randomUUID()}@example.com`;
+      const actor = await prisma.user.create({
+        data: {
+          displayName: "Preview Editor",
+          email,
+          normalizedEmail: email,
+          passwordHash: "not-used-by-preview-tests",
+        },
+      });
+      const entry = await prisma.contentEntry.create({
+        data: { contentTypeId: contentType.id, siteId: site.id },
+      });
+      await prisma.contentLocale.create({
+        data: {
+          contentEntryId: entry.id,
+          data: { title: "Original private draft" },
+          localeId: locale.id,
+          siteId: site.id,
+        },
+      });
+      await prisma.contentEntrySnapshot.create({
+        data: {
+          actorId: actor.id,
+          contentEntryId: entry.id,
+          contentTypeId: contentType.id,
+          locales: [
+            {
+              data: { title: "Original private draft" },
+              localeCode: locale.code,
+              localeId: locale.id,
+              schemaVersion: 1,
+            },
+          ],
+          revision: 1,
+          schemaVersion: 1,
+          siteId: site.id,
+          status: "DRAFT",
+        },
+      });
+
+      const issued = await previews.issue(actor.id, site.id, entry.id, { localeId: locale.id });
+      const persisted = await prisma.contentPreviewToken.findUniqueOrThrow({
+        where: { id: issued.id },
+      });
+      expect(persisted.tokenHash).not.toBe(issued.token);
+      expect(persisted.tokenHash).toHaveLength(64);
+      await expect(previews.redeem(issued.token)).resolves.toMatchObject({
+        data: { title: "Original private draft" },
+        revision: 1,
+        site: { key: site.key },
+        status: "DRAFT",
+      });
+      await expect(
+        previews.issue(actor.id, foreignSite.id, entry.id, { localeId: locale.id }),
+      ).rejects.toBeInstanceOf(ContentPreviewNotFoundError);
+      await expect(
+        prisma.publishedContentEntry.count({ where: { contentEntryId: entry.id } }),
+      ).resolves.toBe(0);
+
+      await prisma.contentEntry.update({
+        data: { revision: 2 },
+        where: { id_siteId: { id: entry.id, siteId: site.id } },
+      });
+      await prisma.contentLocale.update({
+        data: { data: { title: "New private draft" }, revision: 2 },
+        where: { contentEntryId_localeId: { contentEntryId: entry.id, localeId: locale.id } },
+      });
+      await expect(previews.redeem(issued.token)).resolves.toMatchObject({
+        data: { title: "Original private draft" },
+        revision: 1,
+      });
+
+      await prisma.contentPreviewToken.update({
+        data: { expiresAt: new Date("2000-01-01T00:00:00.000Z") },
+        where: { id: issued.id },
+      });
+      await expect(previews.redeem(issued.token)).rejects.toBeInstanceOf(
+        ContentPreviewNotFoundError,
+      );
+    } finally {
       await prisma.$disconnect();
     }
   }, 120_000);
