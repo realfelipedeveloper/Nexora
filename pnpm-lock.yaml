@@ -149,6 +149,9 @@ importers:
       "@nexora/contracts":
         specifier: workspace:*
         version: link:../../packages/contracts
+      "@nexora/rich-text":
+        specifier: workspace:*
+        version: link:../../packages/rich-text
 
   packages/blocks: {}
 

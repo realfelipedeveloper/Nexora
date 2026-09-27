@@ -124,19 +124,35 @@ describe("MediaService", () => {
     expect(storage.put).not.toHaveBeenCalled();
   });
 
-  it("serves public bytes only when an asset belongs to published content", async () => {
+  it("serves public bytes only when an asset is linked to a published locale projection", async () => {
     const { metrics, scanner, storage } = dependencies();
-    const findFirst = vi.fn().mockResolvedValue(null);
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ...selectedAsset(),
+        contentRelations: [
+          {
+            contentEntry: { publishedProjections: [{ localeId: "locale-published" }] },
+            localeId: "locale-draft",
+          },
+        ],
+      });
     const prisma = { asset: { findFirst } } as unknown as PrismaClient;
     const service = new MediaService(prisma, storage, scanner, metrics);
 
     await expect(service.readBySiteKey("public-site", "asset-1", 1)).rejects.toBeInstanceOf(
       AssetNotFoundError,
     );
+    await expect(service.readBySiteKey("public-site", "asset-1", 1)).rejects.toBeInstanceOf(
+      AssetNotFoundError,
+    );
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
-          contentRelations: { some: { contentEntry: { status: "PUBLISHED" } } },
+        select: expect.objectContaining({
+          contentRelations: expect.objectContaining({
+            where: { contentEntry: { publishedProjections: { some: {} } } },
+          }),
         }),
       }),
     );
@@ -193,7 +209,15 @@ describe("MediaService", () => {
 
   it("reads metadata and private bytes only within the requested site", async () => {
     const { metrics, scanner, storage } = dependencies();
-    const assetRecord = selectedAsset();
+    const assetRecord = {
+      ...selectedAsset(),
+      contentRelations: [
+        {
+          contentEntry: { publishedProjections: [{ localeId: "locale-1" }] },
+          localeId: "locale-1",
+        },
+      ],
+    };
     const storedObject = { body: { on: vi.fn(), pipe: vi.fn() } };
     vi.mocked(storage.get).mockResolvedValue(storedObject as never);
     const asset = {

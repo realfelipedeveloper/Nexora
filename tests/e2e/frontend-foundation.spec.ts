@@ -35,11 +35,9 @@ test.describe("frontend foundation", () => {
     });
     const publicResponse = await page.goto(webUrl);
 
-    await expect(
-      page.getByRole("heading", { name: "Universal content, site-ready delivery." }),
-    ).toBeVisible();
-    await expect(page.getByText("ready-for-localhost")).toBeVisible();
-    await expect(page.getByText("domain-agnostic")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Nexora" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByText("Conteúdo publicado com Nexora")).toBeVisible();
 
     const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
     const publicDocument = await page.locator("html").textContent();

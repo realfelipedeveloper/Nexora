@@ -8,6 +8,10 @@ services:
       args:
         NEXORA_TARGET: "@nexora/web"
     environment:
+      CORE_API_INTERNAL_URL: http://core-api:48120
+      NEXORA_PUBLIC_LOCALE: ${NEXORA_PUBLIC_LOCALE:-pt-BR}
+      NEXORA_PUBLIC_MENU_KEY: ${NEXORA_PUBLIC_MENU_KEY:-main}
+      NEXORA_PUBLIC_SITE_KEY: ${NEXORA_PUBLIC_SITE_KEY:-nexora-local}
       NODE_ENV: production
     ports:
       - "${WEB_PUBLIC_PORT:-48110}:48110"

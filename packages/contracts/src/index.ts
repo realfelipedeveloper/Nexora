@@ -23,6 +23,7 @@ export type PublicSiteConfiguration = {
 };
 
 export type PublicContentEntry = {
+  assets: PublicContentAsset[];
   contentType: {
     key: string;
   };
@@ -34,9 +35,51 @@ export type PublicContentEntry = {
   updatedAt: string;
 };
 
+export type PublicContentAsset = {
+  altText: string | null;
+  displayName: string;
+  id: string;
+  mimeType: string;
+  position: number;
+  role: string;
+  version: number;
+};
+
 export type PublicContentPage = {
   items: PublicContentEntry[];
   nextCursor: string | null;
+};
+
+export type PublicRouteResolution =
+  | {
+      contentEntryId: string | null;
+      contentTypeKey: string | null;
+      kind: "route";
+      path: string;
+      routeId: string;
+    }
+  | {
+      kind: "redirect";
+      location: string;
+      statusCode: 301 | 302 | 307 | 308;
+    };
+
+export type PublicNavigationItem = {
+  children: PublicNavigationItem[];
+  externalUrl: string | null;
+  id: string;
+  label: string;
+  linkType: "EXTERNAL" | "INTERNAL";
+  parentId: string | null;
+  path: string | null;
+  position: number;
+};
+
+export type PublicNavigationMenu = {
+  items: PublicNavigationItem[];
+  key: string;
+  locale: string;
+  name: string;
 };
 
 export type ContentPreview = {
