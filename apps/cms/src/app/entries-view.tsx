@@ -9,6 +9,7 @@ import {
   FileClock,
   FilePlus2,
   Files,
+  Eye,
   LoaderCircle,
   MessageSquare,
   RefreshCw,
@@ -32,6 +33,7 @@ import {
   editorialErrorMessage,
   getContentEntry,
   getContentType,
+  issueContentPreview,
   listAssignments,
   listComments,
   listContentEntries,
@@ -79,6 +81,21 @@ const statusLabels: Record<ContentEntryStatus, string> = {
   IN_REVIEW: "In review",
   PUBLISHED: "Published",
 };
+
+async function openContentPreview(
+  csrfToken: string,
+  siteId: string,
+  contentEntryId: string,
+  localeId: string | undefined,
+  revision?: number,
+) {
+  const preview = await issueContentPreview(csrfToken, siteId, contentEntryId, localeId, revision);
+  const link = document.createElement("a");
+  link.href = `/preview/${encodeURIComponent(preview.token)}`;
+  link.rel = "noopener noreferrer";
+  link.target = "_blank";
+  link.click();
+}
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
@@ -238,6 +255,7 @@ function EntryEditor({
   const [activeLocale, setActiveLocale] = useState("");
   const [tab, setTab] = useState<DetailTab>("content");
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -374,6 +392,25 @@ function EntryEditor({
     onMutated();
   }
 
+  async function preview() {
+    if (!editor?.entry || !activeLocale) return;
+    setPreviewing(true);
+    setError("");
+    try {
+      await openContentPreview(
+        csrfToken,
+        siteId,
+        editor.entry.id,
+        activeLocale,
+        editor.entry.revision,
+      );
+    } catch (reason) {
+      setError(editorialErrorMessage(reason));
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   return (
     <div className="entry-editor">
       <header className="detail-header">
@@ -396,7 +433,20 @@ function EntryEditor({
             <p>Create a draft.</p>
           )}
         </div>
-        {editor?.entry ? <StatusBadge status={editor.entry.status} /> : null}
+        {editor?.entry ? (
+          <div className="detail-header-actions">
+            <button
+              className="button button-secondary compact-button"
+              disabled={previewing || !activeLocale}
+              onClick={() => void preview()}
+              title="Preview the saved revision"
+              type="button"
+            >
+              <Eye aria-hidden="true" /> {previewing ? "Opening" : "Preview"}
+            </button>
+            <StatusBadge status={editor.entry.status} />
+          </div>
+        ) : null}
       </header>
       {error ? <InlineAlert>{error}</InlineAlert> : null}
       {message ? (
@@ -960,6 +1010,16 @@ function RevisionsPanel({
       setBusy(false);
     }
   }
+  async function preview(target: number) {
+    setBusy(true);
+    try {
+      await openContentPreview(csrfToken, siteId, entry.id, undefined, target);
+    } catch (reason) {
+      onError(editorialErrorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div className="revisions-layout">
       <section className="revision-list" aria-labelledby="revision-history-title">
@@ -981,16 +1041,27 @@ function RevisionsPanel({
                   {statusLabels[item.status]} · {formatDate(item.createdAt)}
                 </small>
               </span>
-              {canWrite && item.revision !== revision ? (
+              <div className="revision-actions">
                 <button
-                  className="button button-secondary compact-button"
+                  className="icon-button"
                   disabled={busy}
-                  onClick={() => void restore(item.revision)}
+                  onClick={() => void preview(item.revision)}
+                  title={`Preview revision ${item.revision}`}
                   type="button"
                 >
-                  <RotateCcw aria-hidden="true" /> Restore
+                  <Eye aria-hidden="true" />
                 </button>
-              ) : null}
+                {canWrite && item.revision !== revision ? (
+                  <button
+                    className="button button-secondary compact-button"
+                    disabled={busy}
+                    onClick={() => void restore(item.revision)}
+                    type="button"
+                  >
+                    <RotateCcw aria-hidden="true" /> Restore
+                  </button>
+                ) : null}
+              </div>
             </article>
           ))
         )}

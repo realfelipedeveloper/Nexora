@@ -38,3 +38,26 @@ export type PublicContentPage = {
   items: PublicContentEntry[];
   nextCursor: string | null;
 };
+
+export type ContentPreview = {
+  contentType: {
+    displayName: string;
+    key: string;
+  };
+  data: Record<string, unknown>;
+  expiresAt: string;
+  id: string;
+  locale: string;
+  revision: number;
+  schemaVersion: number;
+  scheduledPublication: {
+    action: "PUBLISH" | "UNPUBLISH";
+    scheduledFor: string;
+  } | null;
+  site: {
+    key: string;
+    name: string;
+  };
+  snapshotAt: string;
+  status: "ARCHIVED" | "DRAFT" | "IN_REVIEW" | "PUBLISHED";
+};
