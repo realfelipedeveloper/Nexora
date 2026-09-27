@@ -31,6 +31,19 @@ type PublicContentContext = {
 };
 
 type PublicEntryRecord = {
+  contentEntry: {
+    assetRelations: Array<{
+      asset: {
+        altText: string | null;
+        displayName: string;
+        id: string;
+        mimeType: string;
+        version: number;
+      };
+      position: number;
+      role: string;
+    }>;
+  };
   contentEntryId: string;
   data: Prisma.JsonValue;
   publishedAt: Date | null;
@@ -143,6 +156,11 @@ function projectEntry(entry: PublicEntryRecord, context: PublicContentContext): 
     throw new Error("Published content projection is incomplete.");
   }
   return {
+    assets: entry.contentEntry.assetRelations.map((relation) => ({
+      ...relation.asset,
+      position: relation.position,
+      role: relation.role,
+    })),
     contentType: { key: context.contentTypeKey },
     data: entry.data as Record<string, unknown>,
     id: entry.contentEntryId,
@@ -175,6 +193,27 @@ export class PublicContentService {
     const records = await this.prisma.publishedContentEntry.findMany({
       orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
       select: {
+        contentEntry: {
+          select: {
+            assetRelations: {
+              orderBy: [{ role: "asc" }, { position: "asc" }],
+              select: {
+                asset: {
+                  select: {
+                    altText: true,
+                    displayName: true,
+                    id: true,
+                    mimeType: true,
+                    version: true,
+                  },
+                },
+                position: true,
+                role: true,
+              },
+              where: { localeId: context.localeId },
+            },
+          },
+        },
         contentEntryId: true,
         data: true,
         publishedAt: true,
@@ -218,6 +257,27 @@ export class PublicContentService {
 
     const entry = await this.prisma.publishedContentEntry.findFirst({
       select: {
+        contentEntry: {
+          select: {
+            assetRelations: {
+              orderBy: [{ role: "asc" }, { position: "asc" }],
+              select: {
+                asset: {
+                  select: {
+                    altText: true,
+                    displayName: true,
+                    id: true,
+                    mimeType: true,
+                    version: true,
+                  },
+                },
+                position: true,
+                role: true,
+              },
+              where: { localeId: context.localeId },
+            },
+          },
+        },
         contentEntryId: true,
         data: true,
         publishedAt: true,

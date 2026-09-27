@@ -29,6 +29,7 @@ function publicContext(prisma: ReturnType<typeof fixture>["prisma"]) {
 
 function entry(id = entryId, publishedAt = "2026-09-22T15:00:00.000Z") {
   return {
+    contentEntry: { assetRelations: [] },
     contentEntryId: id,
     data: { title: "Public article" },
     publishedAt: new Date(publishedAt),
@@ -55,6 +56,7 @@ describe("PublicContentService", () => {
     expect(page).toEqual({
       items: [
         {
+          assets: [],
           contentType: { key: "article" },
           data: { title: "Public article" },
           id: entryId,
@@ -84,6 +86,54 @@ describe("PublicContentService", () => {
     expect(JSON.stringify(page)).not.toContain("site-1");
     expect(metrics.render()).toContain(
       'nexora_public_content_reads_total{operation="list",outcome="hit"} 1',
+    );
+  });
+
+  it("projects only versioned assets linked to the requested locale", async () => {
+    const { prisma, service } = fixture();
+    publicContext(prisma);
+    prisma.publishedContentEntry.findFirst.mockResolvedValue({
+      ...entry(),
+      contentEntry: {
+        assetRelations: [
+          {
+            asset: {
+              altText: "Nexora newsroom",
+              displayName: "newsroom.jpg",
+              id: "20000000-0000-4000-8000-000000000001",
+              mimeType: "image/jpeg",
+              version: 4,
+            },
+            position: 0,
+            role: "cover",
+          },
+        ],
+      },
+    });
+
+    await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toMatchObject({
+      assets: [
+        {
+          altText: "Nexora newsroom",
+          displayName: "newsroom.jpg",
+          id: "20000000-0000-4000-8000-000000000001",
+          mimeType: "image/jpeg",
+          position: 0,
+          role: "cover",
+          version: 4,
+        },
+      ],
+    });
+    expect(prisma.publishedContentEntry.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          contentEntry: expect.objectContaining({
+            select: expect.objectContaining({
+              assetRelations: expect.objectContaining({ where: { localeId: "locale-1" } }),
+            }),
+          }),
+        }),
+      }),
     );
   });
 

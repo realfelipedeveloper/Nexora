@@ -1626,6 +1626,7 @@ describe("PostgreSQL migrations and integration", () => {
       );
       expect(publicDetail.headers.etag).toMatch(/^"sha256-[A-Za-z0-9_-]+"$/u);
       expect(publicDetail.body).toEqual({
+        assets: [],
         contentType: { key: "article" },
         data: { summary: "Updated summary", title: submittedTitle },
         id: createdEntry.body.id,

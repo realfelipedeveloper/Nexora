@@ -281,7 +281,10 @@ describe("navigation routing service", () => {
       .mockResolvedValueOnce({
         kind: "ROUTE",
         route: {
-          contentEntry: { id: "entry", publishedProjections: [{ id: "projection" }] },
+          contentEntry: {
+            id: "entry",
+            publishedProjections: [{ contentTypeKey: "article" }],
+          },
           id: routeId,
           path: { path: "/news" },
         },
@@ -302,6 +305,8 @@ describe("navigation routing service", () => {
       .mockResolvedValueOnce(null);
 
     await expect(service.resolvePublicRoute("site", "pt-BR", "/news")).resolves.toMatchObject({
+      contentEntryId: "entry",
+      contentTypeKey: "article",
       kind: "route",
     });
     await expect(service.resolvePublicRoute("site", "pt-BR", "/old")).resolves.toEqual({

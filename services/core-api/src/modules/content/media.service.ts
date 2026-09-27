@@ -362,23 +362,46 @@ export class MediaService {
     const asset = await this.prisma.asset.findFirst({
       select: {
         checksumSha256: true,
+        contentRelations: {
+          select: {
+            contentEntry: {
+              select: {
+                publishedProjections: { select: { localeId: true } },
+              },
+            },
+            localeId: true,
+          },
+          where: { contentEntry: { publishedProjections: { some: {} } } },
+        },
         displayName: true,
         mimeType: true,
         sizeBytes: true,
         storageKey: true,
       },
       where: {
-        contentRelations: { some: { contentEntry: { status: "PUBLISHED" } } },
         id: assetId,
         site: { key: siteKey },
         status: "READY",
         version,
       },
     });
-    if (!asset) throw new AssetNotFoundError();
+    const isPublished = asset?.contentRelations.some((relation) =>
+      relation.contentEntry.publishedProjections.some(
+        (projection) => projection.localeId === relation.localeId,
+      ),
+    );
+    if (!asset || !isPublished) throw new AssetNotFoundError();
     const object = await this.storage.get(asset.storageKey);
     this.metrics.recordMediaOperation("downloaded");
-    return { asset, object };
+    return {
+      asset: {
+        checksumSha256: asset.checksumSha256,
+        displayName: asset.displayName,
+        mimeType: asset.mimeType,
+        sizeBytes: asset.sizeBytes,
+      },
+      object,
+    };
   }
 
   async readBySiteId(

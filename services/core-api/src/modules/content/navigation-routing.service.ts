@@ -497,7 +497,7 @@ export class NavigationRoutingService {
               select: {
                 id: true,
                 publishedProjections: {
-                  select: { id: true },
+                  select: { contentTypeKey: true },
                   take: 1,
                   where: { localeCode },
                 },
@@ -533,6 +533,7 @@ export class NavigationRoutingService {
     }
     return {
       contentEntryId: route.contentEntry?.id ?? null,
+      contentTypeKey: route.contentEntry?.publishedProjections[0]?.contentTypeKey ?? null,
       kind: "route" as const,
       path: route.path.path,
       routeId: route.id,
