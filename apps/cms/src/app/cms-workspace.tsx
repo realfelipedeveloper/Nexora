@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LogOut,
+  Network,
   RefreshCw,
   Save,
   Settings,
@@ -28,6 +29,7 @@ import {
 } from "./editorial-api";
 import { EntriesView } from "./entries-view";
 import { MediaLibraryView } from "./media-library-view";
+import { SiteStructureView } from "./site-structure-view";
 import {
   CmsApiError,
   type CmsSite,
@@ -41,7 +43,7 @@ import {
   saveSiteIdentity,
 } from "./settings-api";
 
-type WorkspaceView = "overview" | "content-types" | "entries" | "media" | "settings";
+type WorkspaceView = "overview" | "content-types" | "entries" | "media" | "structure" | "settings";
 type ResourceState<Value> =
   | { status: "loading" }
   | { setting: StoredSetting<Value> | null; status: "ready" }
@@ -148,7 +150,10 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
   }, [selectedSiteId]);
 
   useEffect(() => {
-    if (!selectedSiteId || (view !== "content-types" && view !== "entries" && view !== "media")) {
+    if (
+      !selectedSiteId ||
+      (view !== "content-types" && view !== "entries" && view !== "media" && view !== "structure")
+    ) {
       setEditorial({ status: "idle" });
       return;
     }
@@ -263,6 +268,15 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
             Media
           </button>
           <button
+            aria-current={view === "structure" ? "page" : undefined}
+            className={view === "structure" ? "nav-item nav-current" : "nav-item"}
+            onClick={() => setView("structure")}
+            type="button"
+          >
+            <Network aria-hidden="true" size={18} />
+            Site structure
+          </button>
+          <button
             aria-current={view === "settings" ? "page" : undefined}
             className={view === "settings" ? "nav-item nav-current" : "nav-item"}
             onClick={() => setView("settings")}
@@ -287,7 +301,9 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
                     ? "Entries"
                     : view === "media"
                       ? "Media"
-                      : "Settings"}
+                      : view === "structure"
+                        ? "Site structure"
+                        : "Settings"}
             </h1>
           </div>
           <div className="header-actions">
@@ -355,7 +371,10 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
           </section>
         ) : null}
 
-        {view === "content-types" || view === "entries" || view === "media" ? (
+        {view === "content-types" ||
+        view === "entries" ||
+        view === "media" ||
+        view === "structure" ? (
           !selectedSiteId ? (
             <p className="empty-state editorial-empty">
               Select an available site to manage content.
@@ -387,9 +406,17 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
               key={selectedSiteId}
               siteId={selectedSiteId}
             />
-          ) : (
+          ) : view === "media" ? (
             <MediaLibraryView
               canWrite={editorial.access.permissionKeys.includes("media.write")}
+              csrfToken={session.csrfToken}
+              key={selectedSiteId}
+              siteId={selectedSiteId}
+            />
+          ) : (
+            <SiteStructureView
+              canWrite={editorial.access.permissionKeys.includes("content.write")}
+              context={editorial.context}
               csrfToken={session.csrfToken}
               key={selectedSiteId}
               siteId={selectedSiteId}
