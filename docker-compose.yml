@@ -138,7 +138,16 @@ services:
 
   redis:
     image: redis:8-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "${REDIS_MAXMEMORY:-256mb}",
+        "--maxmemory-policy",
+        "${REDIS_MAXMEMORY_POLICY:-allkeys-lru}",
+      ]
     ports:
       - "${REDIS_PORT:-48140}:6379"
     healthcheck:

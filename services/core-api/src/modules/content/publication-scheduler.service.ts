@@ -5,6 +5,7 @@ import {
   type PublicationScheduleCreateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { DistributedCacheService } from "../cache/distributed-cache.service.js";
 import { createContentEntrySnapshot } from "./content-entry-snapshot.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { contentEntryTransitionAuditData } from "./content-transition-audit.js";
@@ -83,6 +84,7 @@ export class PublicationSchedulerService implements OnModuleInit, OnModuleDestro
   constructor(
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
+    @Inject(DistributedCacheService) private readonly cache: DistributedCacheService,
   ) {}
 
   onModuleInit() {
@@ -242,7 +244,7 @@ export class PublicationSchedulerService implements OnModuleInit, OnModuleDestro
     });
     if (claimed.count !== 1) return false;
     try {
-      const action = await this.prisma.$transaction(async (transaction) => {
+      const schedule = await this.prisma.$transaction(async (transaction) => {
         const schedule = await transaction.publicationSchedule.findUniqueOrThrow({
           where: { id: scheduleId },
         });
@@ -258,10 +260,11 @@ export class PublicationSchedulerService implements OnModuleInit, OnModuleDestro
           data: { completedAt: now, status: "COMPLETED" },
           where: { id: scheduleId },
         });
-        return schedule.action;
+        return schedule;
       });
+      await this.cache.invalidateSite(schedule.siteId);
       this.metrics.recordPublicationOperation(
-        action === "PUBLISH" ? "scheduled_published" : "scheduled_unpublished",
+        schedule.action === "PUBLISH" ? "scheduled_published" : "scheduled_unpublished",
       );
       return true;
     } catch (error) {

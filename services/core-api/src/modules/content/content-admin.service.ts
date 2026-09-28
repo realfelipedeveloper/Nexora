@@ -15,6 +15,7 @@ import {
   type ContentTypeUpdateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { DistributedCacheService } from "../cache/distributed-cache.service.js";
 import type { SiteAccess } from "../identity/site-permissions.js";
 import { ContentFieldValidator } from "./content-field-validator.js";
 import { ContentAssetRelationService } from "./content-asset-relation.service.js";
@@ -302,6 +303,7 @@ export class ContentAdminService {
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
     @Inject(ContentAssetRelationService)
     private readonly assetRelations: ContentAssetRelationService,
+    @Inject(DistributedCacheService) private readonly cache: DistributedCacheService,
   ) {}
 
   async getEditorialContext(siteId: string) {
@@ -733,6 +735,7 @@ export class ContentAdminService {
   ) {
     const command = parseContentEntryStatusUpdate(input);
     let transition: ContentEntryWorkflowTransition | undefined;
+    let projectionChanged = false;
 
     const result = await this.prisma.$transaction(async (transaction) => {
       const current = await transaction.contentEntry.findUnique({
@@ -754,8 +757,10 @@ export class ContentAdminService {
             current.publishedAt,
             current.revision,
           );
+          projectionChanged = true;
         } else if (current.status !== "PUBLISHED") {
           await removePublishedProjection(transaction, siteId, contentEntryId);
+          projectionChanged = true;
         }
         return transaction.contentEntry.findUniqueOrThrow({
           select: contentEntryDetailSelection,
@@ -810,8 +815,10 @@ export class ContentAdminService {
               converged.publishedAt,
               converged.revision,
             );
+            projectionChanged = true;
           } else {
             await removePublishedProjection(transaction, siteId, contentEntryId);
+            projectionChanged = true;
           }
           return converged;
         }
@@ -829,6 +836,7 @@ export class ContentAdminService {
           entry.publishedAt,
           revision,
         );
+        projectionChanged = true;
         await createPublicationEvent(transaction, {
           contentEntryId,
           publishedAt: entry.publishedAt,
@@ -838,6 +846,7 @@ export class ContentAdminService {
         });
       } else if (current.status === "PUBLISHED") {
         await removePublishedProjection(transaction, siteId, contentEntryId);
+        projectionChanged = true;
         await createPublicationEvent(transaction, {
           contentEntryId,
           publishedAt: null,
@@ -860,6 +869,7 @@ export class ContentAdminService {
       transition = workflowTransition;
       return entry;
     });
+    if (projectionChanged) await this.cache.invalidateSite(siteId);
     if (transition) {
       this.metrics.recordStateTransition(transition.from, transition.to);
       if (transition.action === "PUBLISH") {

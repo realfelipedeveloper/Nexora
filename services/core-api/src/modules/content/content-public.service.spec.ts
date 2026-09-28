@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DistributedCacheService } from "../cache/distributed-cache.service.js";
 import { ContentMetrics } from "./content-metrics.js";
 import { InvalidPublicContentQueryError, PublicContentService } from "./content-public.service.js";
 import type { LocaleManagementService } from "../sites/locale-management.service.js";
@@ -17,12 +18,16 @@ function fixture() {
   };
   const metrics = new ContentMetrics();
   const locales = { resolvePublic: vi.fn() };
+  const cache = {
+    getOrLoad: vi.fn(async (_policy: unknown, loader: () => Promise<unknown>) => await loader()),
+  };
   const service = new PublicContentService(
     prisma as unknown as PrismaClient,
     metrics,
     locales as unknown as LocaleManagementService,
+    cache as unknown as DistributedCacheService,
   );
-  return { locales, metrics, prisma, service };
+  return { cache, locales, metrics, prisma, service };
 }
 
 function publicContext(context: ReturnType<typeof fixture>) {
@@ -77,6 +82,10 @@ describe("PublicContentService", () => {
       nextCursor: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
     });
     expect(context.locales.resolvePublic).toHaveBeenCalledWith("main-site", "pt-BR");
+    expect(context.cache.getOrLoad).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: "content-list", siteId: "site-1" }),
+      expect.any(Function),
+    );
     expect(prisma.publishedContentEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
@@ -222,6 +231,23 @@ describe("PublicContentService", () => {
       locale: "en-US",
     });
     expect(prisma.publishedContentEntry.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a site-scoped cache identity for public detail reads", async () => {
+    const context = fixture();
+    publicContext(context);
+    context.prisma.publishedContentEntry.findFirst.mockResolvedValue(entry());
+
+    await context.service.get("main-site", "article", entryId, "pt-BR");
+
+    expect(context.cache.getOrLoad).toHaveBeenCalledWith(
+      {
+        identity: ["article", "pt-BR", entryId],
+        resource: "content-detail",
+        siteId: "site-1",
+      },
+      expect.any(Function),
+    );
   });
 
   it("does not expose content when the public context or published entry is absent", async () => {

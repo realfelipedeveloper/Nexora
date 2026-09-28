@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { CacheMetrics } from "./cache/cache-metrics.js";
 import { ContentMetrics } from "./content/content-metrics.js";
 import { HealthController } from "./health.controller.js";
 
 describe("HealthController", () => {
   it("reports health", () => {
-    const controller = new HealthController(new ContentMetrics());
+    const controller = new HealthController(new ContentMetrics(), new CacheMetrics());
 
     expect(controller.health()).toMatchObject({
       service: "core-api",
@@ -14,13 +15,15 @@ describe("HealthController", () => {
 
   it("exposes bounded editorial counters", () => {
     const metrics = new ContentMetrics();
+    const cacheMetrics = new CacheMetrics();
+    cacheMetrics.record("hit");
     metrics.recordPreconditionFailure();
     metrics.recordPublicRead("detail", "hit");
     metrics.recordNavigationMutation("route_created");
     metrics.recordPublicationOperation("published");
     metrics.recordRoutingResolution("route");
     metrics.recordStateTransition("DRAFT", "PUBLISHED");
-    const output = new HealthController(metrics).metrics();
+    const output = new HealthController(metrics, cacheMetrics).metrics();
 
     expect(output).toContain("nexora_content_precondition_failures_total 1");
     expect(output).toContain(
@@ -32,5 +35,6 @@ describe("HealthController", () => {
     expect(output).toContain('nexora_navigation_mutations_total{operation="route_created"} 1');
     expect(output).toContain('nexora_routing_resolutions_total{result="route"} 1');
     expect(output).toContain('nexora_publication_operations_total{operation="published"} 1');
+    expect(output).toContain('nexora_distributed_cache_operations_total{outcome="hit"} 1');
   });
 });
