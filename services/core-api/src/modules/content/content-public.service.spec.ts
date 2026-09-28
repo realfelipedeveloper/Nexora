@@ -2,29 +2,36 @@ import type { PrismaClient } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ContentMetrics } from "./content-metrics.js";
 import { InvalidPublicContentQueryError, PublicContentService } from "./content-public.service.js";
+import type { LocaleManagementService } from "../sites/locale-management.service.js";
 
 const entryId = "10000000-0000-4000-8000-000000000001";
 const secondEntryId = "10000000-0000-4000-8000-000000000002";
 
 function fixture() {
   const prisma = {
+    contentType: { findFirst: vi.fn() },
     publishedContentEntry: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
     },
-    site: { findFirst: vi.fn() },
   };
   const metrics = new ContentMetrics();
-  const service = new PublicContentService(prisma as unknown as PrismaClient, metrics);
-  return { metrics, prisma, service };
+  const locales = { resolvePublic: vi.fn() };
+  const service = new PublicContentService(
+    prisma as unknown as PrismaClient,
+    metrics,
+    locales as unknown as LocaleManagementService,
+  );
+  return { locales, metrics, prisma, service };
 }
 
-function publicContext(prisma: ReturnType<typeof fixture>["prisma"]) {
-  prisma.site.findFirst.mockResolvedValue({
-    contentTypes: [{ id: "type-1", key: "article" }],
-    id: "site-1",
+function publicContext(context: ReturnType<typeof fixture>) {
+  context.locales.resolvePublic.mockResolvedValue({
     locales: [{ code: "pt-BR", id: "locale-1" }],
+    requestedLocale: "pt-BR",
+    siteId: "site-1",
   });
+  context.prisma.contentType.findFirst.mockResolvedValue({ id: "type-1", key: "article" });
 }
 
 function entry(id = entryId, publishedAt = "2026-09-22T15:00:00.000Z") {
@@ -44,8 +51,9 @@ describe("PublicContentService", () => {
   });
 
   it("returns a bounded published projection and an opaque cursor", async () => {
-    const { metrics, prisma, service } = fixture();
-    publicContext(prisma);
+    const context = fixture();
+    const { metrics, prisma, service } = context;
+    publicContext(context);
     prisma.publishedContentEntry.findMany.mockResolvedValue([
       entry(),
       entry(secondEntryId, "2026-09-22T14:00:00.000Z"),
@@ -68,9 +76,7 @@ describe("PublicContentService", () => {
       ],
       nextCursor: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
     });
-    expect(prisma.site.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { key: "main-site", status: "ACTIVE" } }),
-    );
+    expect(context.locales.resolvePublic).toHaveBeenCalledWith("main-site", "pt-BR");
     expect(prisma.publishedContentEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
@@ -90,8 +96,9 @@ describe("PublicContentService", () => {
   });
 
   it("projects only versioned assets linked to the requested locale", async () => {
-    const { prisma, service } = fixture();
-    publicContext(prisma);
+    const context = fixture();
+    const { prisma, service } = context;
+    publicContext(context);
     prisma.publishedContentEntry.findFirst.mockResolvedValue({
       ...entry(),
       contentEntry: {
@@ -138,8 +145,9 @@ describe("PublicContentService", () => {
   });
 
   it("applies the opaque cursor to the publication timestamp and identifier", async () => {
-    const { prisma, service } = fixture();
-    publicContext(prisma);
+    const context = fixture();
+    const { prisma, service } = context;
+    publicContext(context);
     prisma.publishedContentEntry.findMany
       .mockResolvedValueOnce([entry(), entry(secondEntryId, "2026-09-22T14:00:00.000Z")])
       .mockResolvedValueOnce([]);
@@ -170,8 +178,9 @@ describe("PublicContentService", () => {
   });
 
   it("returns only a published entry in the resolved site and locale", async () => {
-    const { metrics, prisma, service } = fixture();
-    publicContext(prisma);
+    const context = fixture();
+    const { metrics, prisma, service } = context;
+    publicContext(context);
     prisma.publishedContentEntry.findFirst.mockResolvedValue(entry());
 
     await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toMatchObject({
@@ -193,12 +202,35 @@ describe("PublicContentService", () => {
     );
   });
 
+  it("falls back to the next configured locale when a translation is absent", async () => {
+    const context = fixture();
+    const { locales, prisma, service } = context;
+    locales.resolvePublic.mockResolvedValue({
+      locales: [
+        { code: "pt-BR", id: "locale-1" },
+        { code: "en-US", id: "locale-2" },
+      ],
+      requestedLocale: "pt-BR",
+      siteId: "site-1",
+    });
+    prisma.contentType.findFirst.mockResolvedValue({ id: "type-1", key: "article" });
+    prisma.publishedContentEntry.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(entry());
+
+    await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toMatchObject({
+      locale: "en-US",
+    });
+    expect(prisma.publishedContentEntry.findFirst).toHaveBeenCalledTimes(2);
+  });
+
   it("does not expose content when the public context or published entry is absent", async () => {
-    const { metrics, prisma, service } = fixture();
-    prisma.site.findFirst.mockResolvedValueOnce(null);
+    const context = fixture();
+    const { locales, metrics, prisma, service } = context;
+    locales.resolvePublic.mockResolvedValueOnce(null);
     await expect(service.list("archived-site", "article", { locale: "pt-BR" })).resolves.toBeNull();
 
-    publicContext(prisma);
+    publicContext(context);
     prisma.publishedContentEntry.findFirst.mockResolvedValue(null);
     await expect(service.get("main-site", "article", entryId, "pt-BR")).resolves.toBeNull();
     expect(metrics.render()).toContain(

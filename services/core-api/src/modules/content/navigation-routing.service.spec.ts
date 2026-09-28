@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import type { ContentMetrics } from "./content-metrics.js";
+import type { LocaleManagementService } from "../sites/locale-management.service.js";
 import {
   InvalidNavigationInputError,
   InvalidNavigationPageError,
@@ -51,10 +52,22 @@ function fixture() {
     recordNavigationMutation: vi.fn(),
     recordRoutingResolution: vi.fn(),
   } as unknown as ContentMetrics;
+  const locales = {
+    resolvePublic: vi.fn().mockResolvedValue({
+      locales: [{ code: "pt-BR", id: localeId }],
+      requestedLocale: "pt-BR",
+      siteId: "site",
+    }),
+  };
   return {
     client,
+    locales,
     metrics,
-    service: new NavigationRoutingService(client as unknown as PrismaClient, metrics),
+    service: new NavigationRoutingService(
+      client as unknown as PrismaClient,
+      metrics,
+      locales as unknown as LocaleManagementService,
+    ),
     transaction,
   };
 }
@@ -277,37 +290,62 @@ describe("navigation routing service", () => {
 
   it("resolves canonical, alias, redirect, draft, and absent public paths", async () => {
     const { client, metrics, service } = fixture();
-    client.routingPath.findFirst
-      .mockResolvedValueOnce({
-        kind: "ROUTE",
-        route: {
-          contentEntry: {
-            id: "entry",
-            publishedProjections: [{ contentTypeKey: "article" }],
+    client.route.findMany.mockResolvedValue([
+      {
+        contentEntry: { publishedProjections: [{ localeId }] },
+        locale: { code: "pt-BR", id: localeId },
+        path: { path: "/news" },
+      },
+    ]);
+    client.routingPath.findMany
+      .mockResolvedValueOnce([
+        {
+          kind: "ROUTE",
+          locale: { code: "pt-BR", id: localeId },
+          route: {
+            contentEntry: {
+              id: "entry",
+              publishedProjections: [{ contentTypeKey: "article", localeCode: "pt-BR" }],
+            },
+            id: routeId,
+            path: { path: "/news" },
           },
-          id: routeId,
-          path: { path: "/news" },
         },
-      })
-      .mockResolvedValueOnce({ alias: { route: { path: { path: "/news" } } }, kind: "ALIAS" })
-      .mockResolvedValueOnce({
-        kind: "REDIRECT",
-        redirect: { statusCode: 308, targetPath: "/news" },
-      })
-      .mockResolvedValueOnce({
-        kind: "ROUTE",
-        route: {
-          contentEntry: { id: "draft", publishedProjections: [] },
-          id: routeId,
-          path: { path: "/draft" },
+      ])
+      .mockResolvedValueOnce([
+        {
+          alias: { route: { path: { path: "/news" } } },
+          kind: "ALIAS",
+          locale: { code: "pt-BR", id: localeId },
         },
-      })
-      .mockResolvedValueOnce(null);
+      ])
+      .mockResolvedValueOnce([
+        {
+          kind: "REDIRECT",
+          locale: { code: "pt-BR", id: localeId },
+          redirect: { statusCode: 308, targetPath: "/news" },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          kind: "ROUTE",
+          locale: { code: "pt-BR", id: localeId },
+          route: {
+            contentEntry: { id: "draft", publishedProjections: [] },
+            id: routeId,
+            path: { path: "/draft" },
+          },
+        },
+      ])
+      .mockResolvedValueOnce([]);
 
     await expect(service.resolvePublicRoute("site", "pt-BR", "/news")).resolves.toMatchObject({
+      alternates: [{ locale: "pt-BR", path: "/news" }],
       contentEntryId: "entry",
       contentTypeKey: "article",
       kind: "route",
+      locale: "pt-BR",
+      requestedLocale: "pt-BR",
     });
     await expect(service.resolvePublicRoute("site", "pt-BR", "/old")).resolves.toEqual({
       kind: "redirect",
@@ -329,37 +367,39 @@ describe("navigation routing service", () => {
 
   it("builds a visible public menu tree with internal and external targets", async () => {
     const { client, metrics, service } = fixture();
-    client.menu.findFirst.mockResolvedValue({
-      items: [
-        {
-          externalUrl: null,
-          id: "parent",
-          isVisible: true,
-          label: "Parent",
-          linkType: "INTERNAL",
-          parentId: null,
-          position: 0,
-          route: { path: { path: "/parent" } },
-        },
-        {
-          externalUrl: "https://example.com",
-          id: "child",
-          isVisible: true,
-          label: "Child",
-          linkType: "EXTERNAL",
-          parentId: "parent",
-          position: 0,
-          route: null,
-        },
-      ],
-      key: "main",
-      locale: { code: "pt-BR" },
-      name: "Principal",
-    });
+    client.menu.findMany.mockResolvedValue([
+      {
+        items: [
+          {
+            externalUrl: null,
+            id: "parent",
+            isVisible: true,
+            label: "Parent",
+            linkType: "INTERNAL",
+            parentId: null,
+            position: 0,
+            route: { path: { path: "/parent" } },
+          },
+          {
+            externalUrl: "https://example.com",
+            id: "child",
+            isVisible: true,
+            label: "Child",
+            linkType: "EXTERNAL",
+            parentId: "parent",
+            position: 0,
+            route: null,
+          },
+        ],
+        key: "main",
+        locale: { code: "pt-BR", id: localeId },
+        name: "Principal",
+      },
+    ]);
     const result = await service.getPublicMenu("site", "pt-BR", "main");
     expect(result?.items[0]).toMatchObject({ children: [{ id: "child" }], path: "/parent" });
     expect(metrics.recordRoutingResolution).toHaveBeenCalledWith("menu");
-    client.menu.findFirst.mockResolvedValue(null);
+    client.menu.findMany.mockResolvedValue([]);
     await expect(service.getPublicMenu("site", "pt-BR", "missing")).resolves.toBeNull();
   });
 });

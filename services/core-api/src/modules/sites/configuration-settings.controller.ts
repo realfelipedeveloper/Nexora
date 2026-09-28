@@ -163,6 +163,13 @@ export class SiteSettingsController {
     return this.settings.listSite(siteId);
   }
 
+  @Get("features/resolved")
+  @Header("Cache-Control", "no-store")
+  @RequireSitePermissions("settings.read")
+  features(@Param("siteId", new ParseUUIDPipe({ version: "4" })) siteId: string) {
+    return this.settings.resolveSiteFeatures(siteId);
+  }
+
   @Get(":key")
   @Header("Cache-Control", "no-store")
   @RequireSitePermissions("settings.read")

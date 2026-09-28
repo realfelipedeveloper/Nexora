@@ -203,13 +203,19 @@ model SiteRoleAssignment {
 }
 
 model Locale {
-  id        String   @id @default(uuid())
-  siteId    String
-  code      String
-  isDefault Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id               String   @id @default(uuid())
+  siteId           String
+  code             String
+  isDefault        Boolean  @default(false)
+  fallbackLocaleId String?
+  version          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  fallbackLocale Locale?  @relation("LocaleFallback", fields: [fallbackLocaleId, siteId], references: [id, siteId], onDelete: Restrict)
+  fallbackFor    Locale[] @relation("LocaleFallback")
 
   contentLocales        ContentLocale[]
   menus                 Menu[]
@@ -223,6 +229,7 @@ model Locale {
 
   @@unique([siteId, code])
   @@unique([id, siteId])
+  @@index([siteId, fallbackLocaleId])
 }
 
 model Section {

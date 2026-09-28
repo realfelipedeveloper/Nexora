@@ -16,6 +16,7 @@ import {
   type RouteUpdateInput,
 } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { LocaleManagementService } from "../sites/locale-management.service.js";
 import { ContentMetrics } from "./content-metrics.js";
 
 const defaultPageSize = 25;
@@ -142,6 +143,7 @@ export class NavigationRoutingService {
   constructor(
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
+    @Inject(LocaleManagementService) private readonly locales: LocaleManagementService,
   ) {}
 
   async listMenus(siteId: string, input: MenuPageInput) {
@@ -487,19 +489,20 @@ export class NavigationRoutingService {
 
   async resolvePublicRoute(siteKey: string, localeCode: string, rawPath: string) {
     const path = parse<string>(routePathSchema, rawPath);
-    const routingPath = await this.prisma.routingPath.findFirst({
+    const resolution = await this.locales.resolvePublic(siteKey, localeCode);
+    if (!resolution) return null;
+    const routingPaths = await this.prisma.routingPath.findMany({
       include: {
         alias: { include: { route: { include: { path: true } } } },
         redirect: true,
+        locale: { select: { code: true, id: true } },
         route: {
           include: {
             contentEntry: {
               select: {
                 id: true,
                 publishedProjections: {
-                  select: { contentTypeKey: true },
-                  take: 1,
-                  where: { localeCode },
+                  select: { contentTypeKey: true, localeCode: true },
                 },
               },
             },
@@ -507,8 +510,17 @@ export class NavigationRoutingService {
           },
         },
       },
-      where: { locale: { code: localeCode }, path, site: { key: siteKey, status: "ACTIVE" } },
+      take: resolution.locales.length,
+      where: {
+        localeId: { in: resolution.locales.map((locale) => locale.id) },
+        path,
+        siteId: resolution.siteId,
+      },
     });
+    const priority = new Map(resolution.locales.map((locale, index) => [locale.id, index]));
+    const routingPath = routingPaths.sort(
+      (left, right) => (priority.get(left.locale.id) ?? 99) - (priority.get(right.locale.id) ?? 99),
+    )[0];
     if (!routingPath) return null;
     this.metrics.recordRoutingResolution(
       routingPath.kind.toLowerCase() as "alias" | "redirect" | "route",
@@ -528,34 +540,47 @@ export class NavigationRoutingService {
       };
     }
     const route = routingPath.route;
-    if (!route || (route.contentEntry && route.contentEntry.publishedProjections.length === 0)) {
+    const projection = route?.contentEntry?.publishedProjections.find(
+      (candidate) => candidate.localeCode === routingPath.locale.code,
+    );
+    if (!route || (route.contentEntry && !projection)) {
       return null;
     }
+    const alternates = route.contentEntry
+      ? await this.translationRoutes(resolution.siteId, route.contentEntry.id)
+      : [];
     return {
+      alternates,
       contentEntryId: route.contentEntry?.id ?? null,
-      contentTypeKey: route.contentEntry?.publishedProjections[0]?.contentTypeKey ?? null,
+      contentTypeKey: projection?.contentTypeKey ?? null,
       kind: "route" as const,
+      locale: routingPath.locale.code,
       path: route.path.path,
+      requestedLocale: resolution.requestedLocale,
       routeId: route.id,
     };
   }
 
   async getPublicMenu(siteKey: string, localeCode: string, menuKey: string) {
-    const menu = await this.prisma.menu.findFirst({
+    const resolution = await this.locales.resolvePublic(siteKey, localeCode);
+    if (!resolution) return null;
+    const menus = await this.prisma.menu.findMany({
       include: {
         items: {
           include: { route: { include: { path: true } } },
           orderBy: [{ position: "asc" }, { id: "asc" }],
           where: { isVisible: true },
         },
-        locale: { select: { code: true } },
+        locale: { select: { code: true, id: true } },
       },
       where: {
         key: menuKey,
-        locale: { code: localeCode },
-        site: { key: siteKey, status: "ACTIVE" },
+        localeId: { in: resolution.locales.map((locale) => locale.id) },
+        siteId: resolution.siteId,
       },
     });
+    const byLocale = new Map(menus.map((menu) => [menu.locale.id, menu]));
+    const menu = resolution.locales.map((locale) => byLocale.get(locale.id)).find(Boolean);
     if (!menu) return null;
     const items = menu.items.map((item) => ({
       children: [] as unknown[],
@@ -576,6 +601,25 @@ export class NavigationRoutingService {
     }
     this.metrics.recordRoutingResolution("menu");
     return { items: roots, key: menu.key, locale: menu.locale.code, name: menu.name };
+  }
+
+  private async translationRoutes(siteId: string, contentEntryId: string) {
+    const routes = await this.prisma.route.findMany({
+      select: {
+        contentEntry: { select: { publishedProjections: { select: { localeId: true } } } },
+        locale: { select: { code: true, id: true } },
+        path: { select: { path: true } },
+      },
+      where: { contentEntryId, siteId },
+    });
+    return routes
+      .filter((route) =>
+        route.contentEntry?.publishedProjections.some(
+          (projection) => projection.localeId === route.locale.id,
+        ),
+      )
+      .map((route) => ({ locale: route.locale.code, path: route.path.path }))
+      .sort((left, right) => left.locale.localeCompare(right.locale));
   }
 
   private async requireMenu(

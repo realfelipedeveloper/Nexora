@@ -52,10 +52,13 @@ export type PublicContentPage = {
 
 export type PublicRouteResolution =
   | {
+      alternates: Array<{ locale: string; path: string }>;
       contentEntryId: string | null;
       contentTypeKey: string | null;
       kind: "route";
+      locale: string;
       path: string;
+      requestedLocale: string;
       routeId: string;
     }
   | {

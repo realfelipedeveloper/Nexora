@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  featureFlagDefaults,
   globalConfigurationSchemas,
+  localeCreateSchema,
+  localeUpdateSchema,
   siteConfigurationSchemas,
   siteCreateSchema,
   siteStatusUpdateSchema,
@@ -22,6 +25,27 @@ describe("configuration schemas", () => {
     ).toEqual({
       description: "Universal content platform",
       displayName: "Nexora Docs",
+    });
+  });
+
+  it("accepts only registered feature flags and keeps safe defaults disabled", () => {
+    expect(
+      globalConfigurationSchemas["platform.features"].parse({ "public.search": true }),
+    ).toEqual({
+      "public.search": true,
+    });
+    expect(siteConfigurationSchemas["site.features"].safeParse({ unknown: true }).success).toBe(
+      false,
+    );
+    expect(Object.values(featureFlagDefaults).every((enabled) => !enabled)).toBe(true);
+  });
+
+  it("normalizes locale commands and requires a meaningful update", () => {
+    expect(localeCreateSchema.parse({ code: " pt-br " })).toEqual({ code: "pt-BR" });
+    expect(localeUpdateSchema.safeParse({}).success).toBe(false);
+    expect(localeUpdateSchema.parse({ fallbackLocaleId: null, isDefault: true })).toEqual({
+      fallbackLocaleId: null,
+      isDefault: true,
     });
   });
 

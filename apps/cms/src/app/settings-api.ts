@@ -1,3 +1,11 @@
+import type { FeatureFlagKey } from "@nexora/schemas";
+
+export const cmsFeatureFlagKeys = [
+  "engagement.comments",
+  "engagement.newsletter",
+  "public.search",
+] as const satisfies readonly FeatureFlagKey[];
+
 export type CmsSite = {
   id: string;
   key: string;
@@ -18,6 +26,13 @@ export type PlatformBranding = {
 export type SiteIdentity = {
   description?: string;
   displayName: string;
+};
+
+export type FeatureFlags = Partial<Record<FeatureFlagKey, boolean>>;
+export type ResolvedFeatureFlags = {
+  flags: Record<FeatureFlagKey, boolean>;
+  global: FeatureFlags;
+  site: FeatureFlags;
 };
 
 export class CmsApiError extends Error {
@@ -69,6 +84,32 @@ function parseIdentity(value: unknown): SiteIdentity {
   return value.description === undefined
     ? { displayName: value.displayName }
     : { description: value.description, displayName: value.displayName };
+}
+
+function parseFeatureFlags(value: unknown): FeatureFlags {
+  if (!isRecord(value)) throw new TypeError("Invalid feature flags response.");
+  const allowed = new Set<string>(cmsFeatureFlagKeys);
+  if (
+    Object.entries(value).some(
+      ([key, enabled]) => !allowed.has(key) || typeof enabled !== "boolean",
+    )
+  ) {
+    throw new TypeError("Invalid feature flags response.");
+  }
+  return value;
+}
+
+function parseResolvedFeatureFlags(value: unknown): ResolvedFeatureFlags {
+  if (!isRecord(value)) throw new TypeError("Invalid resolved feature flags response.");
+  const flags = parseFeatureFlags(value.flags);
+  if (cmsFeatureFlagKeys.some((key) => typeof flags[key] !== "boolean")) {
+    throw new TypeError("Invalid resolved feature flags response.");
+  }
+  return {
+    flags: flags as Record<FeatureFlagKey, boolean>,
+    global: parseFeatureFlags(value.global),
+    site: parseFeatureFlags(value.site),
+  };
 }
 
 function parseSetting<Value>(
@@ -169,6 +210,25 @@ export function savePlatformBranding(
   );
 }
 
+export function readPlatformFeatures() {
+  return readSetting("/settings/global/platform.features", "platform.features", parseFeatureFlags);
+}
+
+export function savePlatformFeatures(
+  csrfToken: string,
+  value: FeatureFlags,
+  current: StoredSetting<FeatureFlags> | null,
+) {
+  return writeSetting(
+    "/settings/global/platform.features",
+    csrfToken,
+    "platform.features",
+    value,
+    current,
+    parseFeatureFlags,
+  );
+}
+
 export function readSiteIdentity(siteId: string) {
   return readSetting(`/sites/${siteId}/settings/site.identity`, "site.identity", parseIdentity);
 }
@@ -186,5 +246,31 @@ export function saveSiteIdentity(
     value,
     current,
     parseIdentity,
+  );
+}
+
+export function readSiteFeatures(siteId: string) {
+  return readSetting(`/sites/${siteId}/settings/site.features`, "site.features", parseFeatureFlags);
+}
+
+export function readResolvedSiteFeatures(siteId: string) {
+  return request(`/sites/${siteId}/settings/features/resolved`)
+    .then((response) => response.json())
+    .then(parseResolvedFeatureFlags);
+}
+
+export function saveSiteFeatures(
+  csrfToken: string,
+  siteId: string,
+  value: FeatureFlags,
+  current: StoredSetting<FeatureFlags> | null,
+) {
+  return writeSetting(
+    `/sites/${siteId}/settings/site.features`,
+    csrfToken,
+    "site.features",
+    value,
+    current,
+    parseFeatureFlags,
   );
 }

@@ -45,12 +45,14 @@ describe("ConfigurationSettingsService", () => {
 
     await service.listGlobal();
     expect(prisma.globalSetting.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { key: { in: ["platform.branding"] } } }),
+      expect.objectContaining({
+        where: { key: { in: ["platform.branding", "platform.features"] } },
+      }),
     );
     await service.listSite("site-1");
     expect(prisma.siteSetting.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { key: { in: ["site.identity"] }, siteId: "site-1" },
+        where: { key: { in: ["site.identity", "site.features"] }, siteId: "site-1" },
       }),
     );
   });
@@ -105,6 +107,32 @@ describe("ConfigurationSettingsService", () => {
       },
     });
     expect(JSON.stringify(auditCall)).not.toContain("Nexora");
+  });
+
+  it("resolves site flags over global values and safe defaults", async () => {
+    const prisma = prismaFixture();
+    vi.mocked(prisma.globalSetting.findUnique).mockResolvedValue({
+      ...globalSetting,
+      key: "platform.features",
+      value: { "engagement.comments": true, "public.search": true },
+    });
+    vi.mocked(prisma.siteSetting.findUnique).mockResolvedValue({
+      ...siteSetting,
+      key: "site.features",
+      siteId: "site-1",
+      value: { "public.search": false },
+    });
+    const service = new ConfigurationSettingsService(prisma, new ConfigurationRegistry());
+
+    await expect(service.resolveSiteFeatures("site-1")).resolves.toEqual({
+      flags: {
+        "engagement.comments": true,
+        "engagement.newsletter": false,
+        "public.search": false,
+      },
+      global: { "engagement.comments": true, "public.search": true },
+      site: { "public.search": false },
+    });
   });
 
   it("atomically increments a matching global version", async () => {

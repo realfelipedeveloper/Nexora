@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../../database/database.module.js";
 import { IdentityModule } from "../identity/identity.module.js";
+import { SitesModule } from "../sites/sites.module.js";
 import {
   ContentEntriesController,
   ContentTypesController,
@@ -67,7 +68,7 @@ import { MEDIA_STORAGE, S3MediaStorage } from "./media-storage.js";
     ContentAssetRelationService,
     MediaService,
   ],
-  imports: [DatabaseModule, IdentityModule],
+  imports: [DatabaseModule, IdentityModule, SitesModule],
   providers: [
     ContentAdminService,
     ContentCollaborationService,

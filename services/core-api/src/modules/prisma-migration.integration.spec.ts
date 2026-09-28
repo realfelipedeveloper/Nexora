@@ -66,6 +66,7 @@ import { ConfigurationSettingsService } from "./sites/configuration-settings.ser
 import { PublicConfigurationController } from "./sites/public-configuration.controller.js";
 import { PublicConfigurationService } from "./sites/public-configuration.service.js";
 import { SiteLifecycleService } from "./sites/site-lifecycle.service.js";
+import { LocaleManagementService } from "./sites/locale-management.service.js";
 import { SitesController } from "./sites/sites.controller.js";
 
 const execFileAsync = promisify(execFile);
@@ -895,9 +896,11 @@ describe("PostgreSQL migrations and integration", () => {
       const site = await prisma.site.create({
         data: { key: "legacy-content", name: "Legacy Content" },
       });
-      const locale = await prisma.locale.create({
-        data: { code: "pt-BR", isDefault: true, siteId: site.id },
-      });
+      const locale = { id: randomUUID() };
+      await prisma.$executeRaw`
+        INSERT INTO "Locale" ("id", "siteId", "code", "isDefault", "createdAt")
+        VALUES (${locale.id}, ${site.id}, 'pt-BR', true, CURRENT_TIMESTAMP)
+      `;
       const contentType = await prisma.contentType.create({
         data: {
           displayName: "Legacy Page",
@@ -1068,6 +1071,7 @@ describe("PostgreSQL migrations and integration", () => {
         ContentMetrics,
         ContentVersioningService,
         PublicContentService,
+        LocaleManagementService,
         IdentityService,
         Reflector,
         SessionAuthenticationGuard,
@@ -3570,7 +3574,11 @@ describe("PostgreSQL migrations and integration", () => {
       },
     });
     const metrics = new ContentMetrics();
-    const service = new NavigationRoutingService(prisma, metrics);
+    const service = new NavigationRoutingService(
+      prisma,
+      metrics,
+      new LocaleManagementService(prisma),
+    );
 
     try {
       const route = await service.createRoute(actor.id, firstSite.id, {
@@ -3720,7 +3728,11 @@ describe("PostgreSQL migrations and integration", () => {
     });
     const metrics = new ContentMetrics();
     const scheduler = new PublicationSchedulerService(prisma, metrics);
-    const publicContent = new PublicContentService(prisma, metrics);
+    const publicContent = new PublicContentService(
+      prisma,
+      metrics,
+      new LocaleManagementService(prisma),
+    );
     const dueAt = new Date(Date.now() - 1_000);
     const publishCommandId = "10000000-0000-4000-8000-000000000101";
 

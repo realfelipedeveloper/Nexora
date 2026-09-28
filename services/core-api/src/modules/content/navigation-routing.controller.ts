@@ -27,6 +27,7 @@ import {
   RequireSitePermissions,
   SiteAuthorizationGuard,
 } from "../identity/site-authorization.guard.js";
+import { InvalidLocaleInputError } from "../sites/locale-management.service.js";
 import {
   InvalidNavigationInputError,
   InvalidNavigationPageError,
@@ -50,7 +51,11 @@ function actorId(request: AuthenticatedRequest) {
 }
 
 function mapNavigationError(error: unknown): never {
-  if (error instanceof InvalidNavigationInputError || error instanceof InvalidNavigationPageError) {
+  if (
+    error instanceof InvalidNavigationInputError ||
+    error instanceof InvalidNavigationPageError ||
+    error instanceof InvalidLocaleInputError
+  ) {
     throw new BadRequestException(error.message);
   }
   if (
@@ -402,9 +407,13 @@ export class PublicNavigationController {
     @Query("locale") locale?: string,
   ) {
     if (!locale) throw new BadRequestException("Locale is required.");
-    const menu = await this.navigation.getPublicMenu(siteKey, locale, menuKey);
-    if (!menu) throw new NotFoundException("Public menu was not found.");
-    return menu;
+    try {
+      const menu = await this.navigation.getPublicMenu(siteKey, locale, menuKey);
+      if (!menu) throw new NotFoundException("Public menu was not found.");
+      return menu;
+    } catch (error) {
+      mapNavigationError(error);
+    }
   }
 
   @Get("routes/resolve")
