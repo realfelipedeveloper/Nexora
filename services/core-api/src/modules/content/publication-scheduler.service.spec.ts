@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
+import type { DistributedCacheService } from "../cache/distributed-cache.service.js";
 import type { ContentMetrics } from "./content-metrics.js";
 import {
   InvalidPublicationScheduleError,
@@ -40,10 +41,16 @@ function fixture() {
     publicationSchedule: delegate(),
   };
   const metrics = { recordPublicationOperation: vi.fn() } as unknown as ContentMetrics;
+  const cache = { invalidateSite: vi.fn() };
   return {
+    cache,
     client,
     metrics,
-    service: new PublicationSchedulerService(client as unknown as PrismaClient, metrics),
+    service: new PublicationSchedulerService(
+      client as unknown as PrismaClient,
+      metrics,
+      cache as unknown as DistributedCacheService,
+    ),
     transaction,
   };
 }
@@ -139,7 +146,7 @@ describe("publication scheduler service", () => {
   });
 
   it("claims each due schedule once and records failed executions", async () => {
-    const { client, metrics, service, transaction } = fixture();
+    const { cache, client, metrics, service, transaction } = fixture();
     client.publicationSchedule.findMany.mockResolvedValue([{ id: "schedule-1" }]);
     client.publicationSchedule.updateMany.mockResolvedValue({ count: 1 });
     transaction.publicationSchedule.findUniqueOrThrow.mockResolvedValue({
@@ -162,6 +169,32 @@ describe("publication scheduler service", () => {
       expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }),
     );
     expect(metrics.recordPublicationOperation).toHaveBeenCalledWith("schedule_failed");
+    expect(cache.invalidateSite).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the site cache only after a scheduled projection commits", async () => {
+    const { cache, client, service, transaction } = fixture();
+    client.publicationSchedule.findMany.mockResolvedValue([{ id: "schedule-1" }]);
+    client.publicationSchedule.updateMany.mockResolvedValue({ count: 1 });
+    transaction.publicationSchedule.findUniqueOrThrow.mockResolvedValue({
+      action: "UNPUBLISH",
+      contentEntryId: "entry-1",
+      id: "schedule-1",
+      requestedById: "actor-1",
+      siteId: "site-1",
+    });
+    transaction.contentEntry.findUnique.mockResolvedValue({
+      publishedAt: null,
+      revision: 2,
+      status: "DRAFT",
+    });
+
+    await expect(service.processDue()).resolves.toEqual({ claimed: 1, failed: 0 });
+    expect(transaction.publishedContentEntry.deleteMany).toHaveBeenCalled();
+    expect(cache.invalidateSite).toHaveBeenCalledWith("site-1");
+    expect(client.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      cache.invalidateSite.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("does not execute a schedule claimed by another process", async () => {

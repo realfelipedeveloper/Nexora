@@ -14,6 +14,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PRISMA_CLIENT } from "../database/database.module.js";
 import { createPrismaClient } from "../database/prisma-client.js";
+import { DistributedCacheService } from "./cache/distributed-cache.service.js";
 import {
   ContentEntriesController,
   ContentTypesController,
@@ -76,6 +77,11 @@ const contentSchemaVersioningMigration = "20260917180000_content_schema_versioni
 const contentEditorialStateMigration = "20260922143000_content_entry_editorial_state";
 const editorialWorkflowModelMigration = "20260922223000_editorial_workflow_model";
 const contentEntrySnapshotsMigration = "20260924200000_content_entry_snapshots";
+
+const passthroughCache = {
+  getOrLoad: async (_policy: unknown, loader: () => Promise<unknown>) => await loader(),
+  invalidateSite: async () => undefined,
+};
 
 async function applyMigrationsBeforeContentSchemaVersioning(connectionString: string) {
   const client = new Client({ connectionString });
@@ -1069,6 +1075,7 @@ describe("PostgreSQL migrations and integration", () => {
         ContentAssetRelationService,
         ContentFieldValidator,
         ContentMetrics,
+        { provide: DistributedCacheService, useValue: passthroughCache },
         ContentVersioningService,
         PublicContentService,
         LocaleManagementService,
@@ -2588,6 +2595,7 @@ describe("PostgreSQL migrations and integration", () => {
       new ContentFieldValidator(),
       metrics,
       new ContentAssetRelationService(),
+      passthroughCache as unknown as DistributedCacheService,
     );
     const createEntry = () =>
       prisma.contentEntry.create({
@@ -3727,11 +3735,16 @@ describe("PostgreSQL migrations and integration", () => {
       },
     });
     const metrics = new ContentMetrics();
-    const scheduler = new PublicationSchedulerService(prisma, metrics);
+    const scheduler = new PublicationSchedulerService(
+      prisma,
+      metrics,
+      passthroughCache as unknown as DistributedCacheService,
+    );
     const publicContent = new PublicContentService(
       prisma,
       metrics,
       new LocaleManagementService(prisma),
+      passthroughCache as unknown as DistributedCacheService,
     );
     const dueAt = new Date(Date.now() - 1_000);
     const publishCommandId = "10000000-0000-4000-8000-000000000101";

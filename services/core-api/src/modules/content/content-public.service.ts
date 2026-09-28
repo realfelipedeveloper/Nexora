@@ -2,6 +2,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { PublicContentEntry, PublicContentPage } from "@nexora/contracts";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { DistributedCacheService } from "../cache/distributed-cache.service.js";
 import { LocaleManagementService } from "../sites/locale-management.service.js";
 import { ContentMetrics } from "./content-metrics.js";
 
@@ -178,6 +179,7 @@ export class PublicContentService {
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
     @Inject(LocaleManagementService) private readonly locales: LocaleManagementService,
+    @Inject(DistributedCacheService) private readonly cache: DistributedCacheService,
   ) {}
 
   async list(
@@ -191,56 +193,71 @@ export class PublicContentService {
       this.metrics.recordPublicRead("list", "miss");
       return null;
     }
-    for (const [index, context] of contexts.entries()) {
-      const records = await this.prisma.publishedContentEntry.findMany({
-        orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
-        select: {
-          contentEntry: {
-            select: {
-              assetRelations: {
-                orderBy: [{ role: "asc" }, { position: "asc" }],
-                select: {
-                  asset: {
-                    select: {
-                      altText: true,
-                      displayName: true,
-                      id: true,
-                      mimeType: true,
-                      version: true,
-                    },
-                  },
-                  position: true,
-                  role: true,
-                },
-                where: { localeId: context.localeId },
-              },
-            },
-          },
-          contentEntryId: true,
-          data: true,
-          publishedAt: true,
-          schemaVersion: true,
-          updatedAt: true,
-        },
-        take: parsed.limit + 1,
-        where: {
-          ...cursorFilter(parsed.cursor),
-          contentTypeKey: context.contentTypeKey,
-          localeCode: context.localeCode,
-          siteId: context.siteId,
-        },
-      });
-      if (records.length === 0 && index < contexts.length - 1) continue;
-      const hasNextPage = records.length > parsed.limit;
-      const visibleRecords = records.slice(0, parsed.limit);
-      const lastVisible = visibleRecords.at(-1);
-      this.metrics.recordPublicRead("list", records.length ? "hit" : "miss");
-      return {
-        items: visibleRecords.map((entry) => projectEntry(entry, context)),
-        nextCursor: hasNextPage && lastVisible ? encodeCursor(lastVisible) : null,
-      };
+    const siteId = contexts[0]?.siteId;
+    if (!siteId) {
+      this.metrics.recordPublicRead("list", "miss");
+      return null;
     }
-    return { items: [], nextCursor: null };
+    const page = await this.cache.getOrLoad<PublicContentPage>(
+      {
+        identity: [contentTypeKey, parsed.locale, String(parsed.limit), query.cursor ?? "first"],
+        resource: "content-list",
+        siteId,
+      },
+      async () => {
+        for (const [index, context] of contexts.entries()) {
+          const records = await this.prisma.publishedContentEntry.findMany({
+            orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
+            select: {
+              contentEntry: {
+                select: {
+                  assetRelations: {
+                    orderBy: [{ role: "asc" }, { position: "asc" }],
+                    select: {
+                      asset: {
+                        select: {
+                          altText: true,
+                          displayName: true,
+                          id: true,
+                          mimeType: true,
+                          version: true,
+                        },
+                      },
+                      position: true,
+                      role: true,
+                    },
+                    where: { localeId: context.localeId },
+                  },
+                },
+              },
+              contentEntryId: true,
+              data: true,
+              publishedAt: true,
+              schemaVersion: true,
+              updatedAt: true,
+            },
+            take: parsed.limit + 1,
+            where: {
+              ...cursorFilter(parsed.cursor),
+              contentTypeKey: context.contentTypeKey,
+              localeCode: context.localeCode,
+              siteId: context.siteId,
+            },
+          });
+          if (records.length === 0 && index < contexts.length - 1) continue;
+          const hasNextPage = records.length > parsed.limit;
+          const visibleRecords = records.slice(0, parsed.limit);
+          const lastVisible = visibleRecords.at(-1);
+          return {
+            items: visibleRecords.map((entry) => projectEntry(entry, context)),
+            nextCursor: hasNextPage && lastVisible ? encodeCursor(lastVisible) : null,
+          };
+        }
+        return { items: [], nextCursor: null };
+      },
+    );
+    this.metrics.recordPublicRead("list", page?.items.length ? "hit" : "miss");
+    return page;
   }
 
   async get(
@@ -258,50 +275,62 @@ export class PublicContentService {
       this.metrics.recordPublicRead("detail", "miss");
       return null;
     }
-    for (const context of contexts) {
-      const entry = await this.prisma.publishedContentEntry.findFirst({
-        select: {
-          contentEntry: {
-            select: {
-              assetRelations: {
-                orderBy: [{ role: "asc" }, { position: "asc" }],
-                select: {
-                  asset: {
-                    select: {
-                      altText: true,
-                      displayName: true,
-                      id: true,
-                      mimeType: true,
-                      version: true,
-                    },
-                  },
-                  position: true,
-                  role: true,
-                },
-                where: { localeId: context.localeId },
-              },
-            },
-          },
-          contentEntryId: true,
-          data: true,
-          publishedAt: true,
-          schemaVersion: true,
-          updatedAt: true,
-        },
-        where: {
-          contentEntryId: entryId,
-          contentTypeKey: context.contentTypeKey,
-          localeCode: context.localeCode,
-          siteId: context.siteId,
-        },
-      });
-      if (entry) {
-        this.metrics.recordPublicRead("detail", "hit");
-        return projectEntry(entry, context);
-      }
+    const siteId = contexts[0]?.siteId;
+    if (!siteId) {
+      this.metrics.recordPublicRead("detail", "miss");
+      return null;
     }
-    this.metrics.recordPublicRead("detail", "miss");
-    return null;
+    const result = await this.cache.getOrLoad<PublicContentEntry>(
+      {
+        identity: [contentTypeKey, parsed.locale, entryId],
+        resource: "content-detail",
+        siteId,
+      },
+      async () => {
+        for (const context of contexts) {
+          const entry = await this.prisma.publishedContentEntry.findFirst({
+            select: {
+              contentEntry: {
+                select: {
+                  assetRelations: {
+                    orderBy: [{ role: "asc" }, { position: "asc" }],
+                    select: {
+                      asset: {
+                        select: {
+                          altText: true,
+                          displayName: true,
+                          id: true,
+                          mimeType: true,
+                          version: true,
+                        },
+                      },
+                      position: true,
+                      role: true,
+                    },
+                    where: { localeId: context.localeId },
+                  },
+                },
+              },
+              contentEntryId: true,
+              data: true,
+              publishedAt: true,
+              schemaVersion: true,
+              updatedAt: true,
+            },
+            where: {
+              contentEntryId: entryId,
+              contentTypeKey: context.contentTypeKey,
+              localeCode: context.localeCode,
+              siteId: context.siteId,
+            },
+          });
+          if (entry) return projectEntry(entry, context);
+        }
+        return null;
+      },
+    );
+    this.metrics.recordPublicRead("detail", result ? "hit" : "miss");
+    return result;
   }
 
   private async resolveContexts(
