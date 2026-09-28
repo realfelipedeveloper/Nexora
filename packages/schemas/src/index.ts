@@ -4,10 +4,27 @@ const productNameSchema = z.string().trim().min(1).max(80);
 const displayNameSchema = z.string().trim().min(1).max(120);
 const descriptionSchema = z.string().trim().min(1).max(500);
 
+export const featureFlagKeys = [
+  "engagement.comments",
+  "engagement.newsletter",
+  "public.search",
+] as const;
+
+export const featureFlagKeySchema = z.enum(featureFlagKeys);
+export const featureFlagsSchema = z.partialRecord(featureFlagKeySchema, z.boolean());
+
+export type FeatureFlagKey = z.infer<typeof featureFlagKeySchema>;
+export type FeatureFlags = z.infer<typeof featureFlagsSchema>;
+
+export const featureFlagDefaults = Object.freeze(
+  Object.fromEntries(featureFlagKeys.map((key) => [key, false])) as Record<FeatureFlagKey, boolean>,
+);
+
 export const globalConfigurationSchemas = Object.freeze({
   "platform.branding": z.strictObject({
     productName: productNameSchema,
   }),
+  "platform.features": featureFlagsSchema,
 });
 
 export const siteConfigurationSchemas = Object.freeze({
@@ -15,6 +32,7 @@ export const siteConfigurationSchemas = Object.freeze({
     description: descriptionSchema.optional(),
     displayName: displayNameSchema,
   }),
+  "site.features": featureFlagsSchema,
 });
 
 export type GlobalConfigurationKey = keyof typeof globalConfigurationSchemas;
@@ -47,6 +65,32 @@ export const siteStatusUpdateSchema = z.strictObject({
 export type SiteCreateInput = z.infer<typeof siteCreateSchema>;
 export type SiteStatus = z.infer<typeof siteStatusSchema>;
 export type SiteStatusUpdateInput = z.infer<typeof siteStatusUpdateSchema>;
+
+export const localeCodeSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(35)
+  .regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u)
+  .transform((value) => Intl.getCanonicalLocales(value)[0] ?? value);
+
+export const localeCreateSchema = z.strictObject({
+  code: localeCodeSchema,
+  fallbackLocaleId: z.string().uuid().nullable().optional(),
+  isDefault: z.boolean().optional(),
+});
+
+export const localeUpdateSchema = z
+  .strictObject({
+    fallbackLocaleId: z.string().uuid().nullable().optional(),
+    isDefault: z.boolean().optional(),
+  })
+  .refine((value) => value.fallbackLocaleId !== undefined || value.isDefault !== undefined, {
+    message: "At least one locale property must be supplied.",
+  });
+
+export type LocaleCreateInput = z.infer<typeof localeCreateSchema>;
+export type LocaleUpdateInput = z.infer<typeof localeUpdateSchema>;
 
 export const initialFieldTypes = [
   "text",

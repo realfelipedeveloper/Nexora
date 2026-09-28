@@ -11,6 +11,8 @@ import { PublicConfigurationController } from "./public-configuration.controller
 import { PublicConfigurationService } from "./public-configuration.service.js";
 import { SiteLifecycleService } from "./site-lifecycle.service.js";
 import { SitesController } from "./sites.controller.js";
+import { LocaleManagementController } from "./locale-management.controller.js";
+import { LocaleManagementService } from "./locale-management.service.js";
 
 @Module({
   controllers: [
@@ -18,14 +20,16 @@ import { SitesController } from "./sites.controller.js";
     SiteSettingsController,
     SitesController,
     PublicConfigurationController,
+    LocaleManagementController,
   ],
-  exports: [ConfigurationRegistry],
+  exports: [ConfigurationRegistry, LocaleManagementService],
   imports: [DatabaseModule, IdentityModule],
   providers: [
     ConfigurationRegistry,
     ConfigurationSettingsService,
     PublicConfigurationService,
     SiteLifecycleService,
+    LocaleManagementService,
   ],
 })
 export class SitesModule {}

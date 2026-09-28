@@ -20,8 +20,8 @@ describe("ConfigurationRegistry", () => {
 
     expect(branding.productName).toBe("Nexora");
     expect(identity.displayName).toBe("Main Site");
-    expect(registry.registeredKeys("global")).toEqual(["platform.branding"]);
-    expect(registry.registeredKeys("site")).toEqual(["site.identity"]);
+    expect(registry.registeredKeys("global")).toEqual(["platform.branding", "platform.features"]);
+    expect(registry.registeredKeys("site")).toEqual(["site.identity", "site.features"]);
     expect(registry.publicKeys("global")).toEqual(["platform.branding"]);
     expect(registry.publicKeys("site")).toEqual(["site.identity"]);
   });

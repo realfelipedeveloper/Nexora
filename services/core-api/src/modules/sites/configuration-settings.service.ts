@@ -1,5 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { featureFlagDefaults, type FeatureFlagKey } from "@nexora/schemas";
 import { InjectPrismaClient } from "../../database/database.module.js";
 import {
   ConfigurationKeyNotRegisteredError,
@@ -65,6 +66,33 @@ export class ConfigurationSettingsService {
         siteId,
       },
     });
+  }
+
+  async resolveSiteFeatures(siteId: string) {
+    const [globalSetting, siteSetting] = await Promise.all([
+      this.prisma.globalSetting.findUnique({
+        select: { value: true },
+        where: { key: "platform.features" },
+      }),
+      this.prisma.siteSetting.findUnique({
+        select: { value: true },
+        where: { siteId_key: { key: "site.features", siteId } },
+      }),
+    ]);
+    const globalFlags = globalSetting
+      ? this.registry.validateGlobal("platform.features", globalSetting.value)
+      : {};
+    const siteFlags = siteSetting
+      ? this.registry.validateSite("site.features", siteSetting.value)
+      : {};
+    const flags = Object.fromEntries(
+      (Object.keys(featureFlagDefaults) as FeatureFlagKey[]).map((key) => [
+        key,
+        siteFlags[key] ?? globalFlags[key] ?? featureFlagDefaults[key],
+      ]),
+    ) as Record<FeatureFlagKey, boolean>;
+
+    return { flags, global: globalFlags, site: siteFlags };
   }
 
   async getGlobal(key: string) {

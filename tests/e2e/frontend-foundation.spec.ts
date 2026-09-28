@@ -24,6 +24,32 @@ async function routeEmptyWorkspace(page: Page) {
   });
 }
 
+async function routeEmptyConfigurationAndLocales(page: Page) {
+  await page.route("**/api/core/settings/global/platform.features", async (route) => {
+    await route.fulfill({ body: "", status: 404 });
+  });
+  await page.route("**/api/core/sites/*/settings/site.features", async (route) => {
+    await route.fulfill({ body: "", status: 404 });
+  });
+  await page.route("**/api/core/sites/*/settings/features/resolved", async (route) => {
+    await route.fulfill({
+      json: {
+        flags: {
+          "engagement.comments": false,
+          "engagement.newsletter": false,
+          "public.search": false,
+        },
+        global: {},
+        site: {},
+      },
+      status: 200,
+    });
+  });
+  await page.route("**/api/core/sites/*/locales", async (route) => {
+    await route.fulfill({ json: [], status: 200 });
+  });
+}
+
 test.describe("frontend foundation", () => {
   test("public app renders and passes accessibility checks", async ({ page }) => {
     const identityRequests: string[] = [];
@@ -194,6 +220,7 @@ test.describe("frontend foundation", () => {
     await page.route("**/api/core/auth/session", async (route) => {
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
+    await routeEmptyConfigurationAndLocales(page);
     await page.route("**/api/core/sites", async (route) => {
       await route.fulfill({
         json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
@@ -260,6 +287,7 @@ test.describe("frontend foundation", () => {
     await page.route("**/api/core/auth/session", async (route) => {
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
+    await routeEmptyConfigurationAndLocales(page);
     await page.route("**/api/core/sites", async (route) => {
       await route.fulfill({
         json: [
@@ -317,6 +345,7 @@ test.describe("frontend foundation", () => {
     await page.route("**/api/core/auth/session", async (route) => {
       await route.fulfill({ json: authenticatedSession, status: 200 });
     });
+    await routeEmptyConfigurationAndLocales(page);
     await page.route("**/api/core/sites", async (route) => {
       await route.fulfill({
         json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
@@ -350,6 +379,106 @@ test.describe("frontend foundation", () => {
     await page.getByRole("button", { name: "Reload" }).click();
     await expect(page.getByLabel("Display name")).toHaveValue("Documentation");
     expect(identityReads).toBe(2);
+  });
+
+  test("cms manages feature overrides and locale fallbacks without horizontal overflow", async ({
+    page,
+  }) => {
+    let featureHeaders: Record<string, string> | undefined;
+    let localeHeaders: Record<string, string> | undefined;
+    const locales = [
+      {
+        code: "pt-BR",
+        fallbackLocale: null,
+        fallbackLocaleId: null,
+        id: "20000000-0000-4000-8000-000000000001",
+        isDefault: true,
+        version: 1,
+      },
+    ];
+    await page.route("**/api/core/auth/session", async (route) => {
+      await route.fulfill({ json: authenticatedSession, status: 200 });
+    });
+    await page.route("**/api/core/sites", async (route) => {
+      await route.fulfill({
+        json: [{ id: "site-1", key: "docs", name: "Documentation", status: "ACTIVE" }],
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/settings/global/platform.branding", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.identity", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/settings/global/platform.features", async (route) => {
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/settings/features/resolved", async (route) => {
+      await route.fulfill({
+        json: {
+          flags: {
+            "engagement.comments": false,
+            "engagement.newsletter": false,
+            "public.search": false,
+          },
+          global: {},
+          site: {},
+        },
+        status: 200,
+      });
+    });
+    await page.route("**/api/core/sites/site-1/settings/site.features", async (route) => {
+      if (route.request().method() === "PUT") {
+        featureHeaders = route.request().headers();
+        await route.fulfill({
+          headers: { ETag: '"1"' },
+          json: { key: "site.features", value: { "public.search": true }, version: 1 },
+          status: 200,
+        });
+        return;
+      }
+      await route.fulfill({ body: "", status: 404 });
+    });
+    await page.route("**/api/core/sites/site-1/locales", async (route) => {
+      if (route.request().method() === "POST") {
+        localeHeaders = route.request().headers();
+        const created = {
+          code: "en-US",
+          fallbackLocale: { code: "pt-BR", id: locales[0]!.id },
+          fallbackLocaleId: locales[0]!.id,
+          id: "20000000-0000-4000-8000-000000000002",
+          isDefault: false,
+          version: 1,
+        };
+        locales.push(created);
+        await route.fulfill({ headers: { ETag: '"1"' }, json: created, status: 201 });
+        return;
+      }
+      await route.fulfill({ json: locales, status: 200 });
+    });
+
+    await page.goto(cmsUrl);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("heading", { name: "Feature flags" })).toBeVisible();
+    await page.getByLabel("Public search override").selectOption("enabled");
+    await page.getByRole("button", { name: "Save site overrides" }).click();
+    await expect(page.getByText("Site feature overrides saved.")).toBeVisible();
+    await page.getByLabel("Locale code").fill("en-US");
+    await page.getByLabel("Fallback", { exact: true }).selectOption(locales[0]!.id);
+    await page.getByRole("button", { name: "Add locale" }).click();
+    await expect(page.locator(".locale-row strong", { hasText: "en-US" })).toBeVisible();
+    expect(featureHeaders?.["if-none-match"]).toBe("*");
+    expect(featureHeaders?.["x-csrf-token"]).toBe(csrfToken);
+    expect(localeHeaders?.["x-csrf-token"]).toBe(csrfToken);
+
+    await page.setViewportSize({ height: 844, width: 390 });
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 
   test("cms edits content models and advances an entry with scoped concurrency", async ({

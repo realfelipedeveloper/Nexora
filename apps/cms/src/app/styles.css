@@ -493,6 +493,91 @@ textarea:focus {
   margin-top: 10px;
 }
 
+.settings-layout > .workspace-alert,
+.settings-layout > .save-notice {
+  grid-column: 1 / -1;
+}
+
+.settings-form h3 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+}
+
+.feature-overrides {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e5e2;
+}
+
+.feature-override {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 150px);
+  align-items: center;
+  gap: 12px;
+}
+
+.feature-override span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.feature-override small {
+  color: #687570;
+  font-weight: 500;
+}
+
+.locale-create {
+  grid-template-columns: minmax(110px, 0.8fr) minmax(120px, 1fr);
+  align-items: end;
+}
+
+.locale-create .checkbox-label,
+.locale-create .button {
+  margin-top: 8px;
+}
+
+.locale-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.locale-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) minmax(130px, 1fr) 40px 40px;
+  align-items: end;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid #e0e5e2;
+}
+
+.locale-row > div {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.locale-row label {
+  margin: 0;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #27624f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.danger-icon {
+  color: #922f2d;
+}
+
 .settings-status,
 .empty-state,
 .site-key,
@@ -1953,6 +2038,15 @@ textarea:focus {
     grid-template-columns: 1fr;
     gap: 28px;
     padding-top: 28px;
+  }
+
+  .locale-create,
+  .locale-row {
+    grid-template-columns: 1fr;
+  }
+
+  .locale-row .icon-button {
+    justify-self: start;
   }
 
   .workspace {

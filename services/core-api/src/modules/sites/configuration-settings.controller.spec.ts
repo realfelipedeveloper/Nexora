@@ -44,6 +44,7 @@ function fixture() {
     getSite: vi.fn(),
     listGlobal: vi.fn(),
     listSite: vi.fn(),
+    resolveSiteFeatures: vi.fn(),
     writeGlobal: vi.fn(),
     writeSite: vi.fn(),
   };
@@ -122,6 +123,13 @@ describe("configuration settings controllers", () => {
       { displayName: "Main" },
       { mode: "update", version: 1 },
     );
+  });
+
+  it("resolves feature flags within the requested site", async () => {
+    const { service, site } = fixture();
+    service.resolveSiteFeatures.mockResolvedValue({ flags: {} });
+    await expect(site.features("site-1")).resolves.toEqual({ flags: {} });
+    expect(service.resolveSiteFeatures).toHaveBeenCalledWith("site-1");
   });
 
   it.each([

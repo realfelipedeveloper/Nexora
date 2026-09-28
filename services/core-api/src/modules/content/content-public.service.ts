@@ -2,6 +2,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { PublicContentEntry, PublicContentPage } from "@nexora/contracts";
 import { InjectPrismaClient } from "../../database/database.module.js";
+import { LocaleManagementService } from "../sites/locale-management.service.js";
 import { ContentMetrics } from "./content-metrics.js";
 
 const defaultPageSize = 25;
@@ -176,6 +177,7 @@ export class PublicContentService {
   constructor(
     @InjectPrismaClient() private readonly prisma: PrismaClient,
     @Inject(ContentMetrics) private readonly metrics: ContentMetrics,
+    @Inject(LocaleManagementService) private readonly locales: LocaleManagementService,
   ) {}
 
   async list(
@@ -184,59 +186,61 @@ export class PublicContentService {
     query: PublicContentQuery,
   ): Promise<PublicContentPage | null> {
     const parsed = parseQuery(siteKey, contentTypeKey, query);
-    const context = await this.resolveContext(siteKey, contentTypeKey, parsed.locale);
-    if (!context) {
+    const contexts = await this.resolveContexts(siteKey, contentTypeKey, parsed.locale);
+    if (!contexts) {
       this.metrics.recordPublicRead("list", "miss");
       return null;
     }
-
-    const records = await this.prisma.publishedContentEntry.findMany({
-      orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
-      select: {
-        contentEntry: {
-          select: {
-            assetRelations: {
-              orderBy: [{ role: "asc" }, { position: "asc" }],
-              select: {
-                asset: {
-                  select: {
-                    altText: true,
-                    displayName: true,
-                    id: true,
-                    mimeType: true,
-                    version: true,
+    for (const [index, context] of contexts.entries()) {
+      const records = await this.prisma.publishedContentEntry.findMany({
+        orderBy: [{ publishedAt: "desc" }, { contentEntryId: "desc" }],
+        select: {
+          contentEntry: {
+            select: {
+              assetRelations: {
+                orderBy: [{ role: "asc" }, { position: "asc" }],
+                select: {
+                  asset: {
+                    select: {
+                      altText: true,
+                      displayName: true,
+                      id: true,
+                      mimeType: true,
+                      version: true,
+                    },
                   },
+                  position: true,
+                  role: true,
                 },
-                position: true,
-                role: true,
+                where: { localeId: context.localeId },
               },
-              where: { localeId: context.localeId },
             },
           },
+          contentEntryId: true,
+          data: true,
+          publishedAt: true,
+          schemaVersion: true,
+          updatedAt: true,
         },
-        contentEntryId: true,
-        data: true,
-        publishedAt: true,
-        schemaVersion: true,
-        updatedAt: true,
-      },
-      take: parsed.limit + 1,
-      where: {
-        ...cursorFilter(parsed.cursor),
-        contentTypeKey: context.contentTypeKey,
-        localeCode: context.localeCode,
-        siteId: context.siteId,
-      },
-    });
-    const hasNextPage = records.length > parsed.limit;
-    const visibleRecords = records.slice(0, parsed.limit);
-    const lastVisible = visibleRecords.at(-1);
-    this.metrics.recordPublicRead("list", "hit");
-
-    return {
-      items: visibleRecords.map((entry) => projectEntry(entry, context)),
-      nextCursor: hasNextPage && lastVisible ? encodeCursor(lastVisible) : null,
-    };
+        take: parsed.limit + 1,
+        where: {
+          ...cursorFilter(parsed.cursor),
+          contentTypeKey: context.contentTypeKey,
+          localeCode: context.localeCode,
+          siteId: context.siteId,
+        },
+      });
+      if (records.length === 0 && index < contexts.length - 1) continue;
+      const hasNextPage = records.length > parsed.limit;
+      const visibleRecords = records.slice(0, parsed.limit);
+      const lastVisible = visibleRecords.at(-1);
+      this.metrics.recordPublicRead("list", records.length ? "hit" : "miss");
+      return {
+        items: visibleRecords.map((entry) => projectEntry(entry, context)),
+        nextCursor: hasNextPage && lastVisible ? encodeCursor(lastVisible) : null,
+      };
+    }
+    return { items: [], nextCursor: null };
   }
 
   async get(
@@ -249,84 +253,75 @@ export class PublicContentService {
     if (!uuidPattern.test(entryId)) {
       throw new InvalidPublicContentQueryError();
     }
-    const context = await this.resolveContext(siteKey, contentTypeKey, parsed.locale);
-    if (!context) {
+    const contexts = await this.resolveContexts(siteKey, contentTypeKey, parsed.locale);
+    if (!contexts) {
       this.metrics.recordPublicRead("detail", "miss");
       return null;
     }
-
-    const entry = await this.prisma.publishedContentEntry.findFirst({
-      select: {
-        contentEntry: {
-          select: {
-            assetRelations: {
-              orderBy: [{ role: "asc" }, { position: "asc" }],
-              select: {
-                asset: {
-                  select: {
-                    altText: true,
-                    displayName: true,
-                    id: true,
-                    mimeType: true,
-                    version: true,
+    for (const context of contexts) {
+      const entry = await this.prisma.publishedContentEntry.findFirst({
+        select: {
+          contentEntry: {
+            select: {
+              assetRelations: {
+                orderBy: [{ role: "asc" }, { position: "asc" }],
+                select: {
+                  asset: {
+                    select: {
+                      altText: true,
+                      displayName: true,
+                      id: true,
+                      mimeType: true,
+                      version: true,
+                    },
                   },
+                  position: true,
+                  role: true,
                 },
-                position: true,
-                role: true,
+                where: { localeId: context.localeId },
               },
-              where: { localeId: context.localeId },
             },
           },
+          contentEntryId: true,
+          data: true,
+          publishedAt: true,
+          schemaVersion: true,
+          updatedAt: true,
         },
-        contentEntryId: true,
-        data: true,
-        publishedAt: true,
-        schemaVersion: true,
-        updatedAt: true,
-      },
-      where: {
-        contentEntryId: entryId,
-        contentTypeKey: context.contentTypeKey,
-        localeCode: context.localeCode,
-        siteId: context.siteId,
-      },
-    });
-    this.metrics.recordPublicRead("detail", entry ? "hit" : "miss");
-    return entry ? projectEntry(entry, context) : null;
+        where: {
+          contentEntryId: entryId,
+          contentTypeKey: context.contentTypeKey,
+          localeCode: context.localeCode,
+          siteId: context.siteId,
+        },
+      });
+      if (entry) {
+        this.metrics.recordPublicRead("detail", "hit");
+        return projectEntry(entry, context);
+      }
+    }
+    this.metrics.recordPublicRead("detail", "miss");
+    return null;
   }
 
-  private async resolveContext(
+  private async resolveContexts(
     siteKey: string,
     contentTypeKey: string,
     localeCode: string,
-  ): Promise<PublicContentContext | null> {
-    const site = await this.prisma.site.findFirst({
-      select: {
-        contentTypes: {
-          select: { id: true, key: true },
-          take: 1,
-          where: { key: contentTypeKey },
-        },
-        id: true,
-        locales: {
-          select: { code: true, id: true },
-          take: 1,
-          where: { code: localeCode },
-        },
-      },
-      where: { key: siteKey, status: "ACTIVE" },
+  ): Promise<PublicContentContext[] | null> {
+    const resolution = await this.locales.resolvePublic(siteKey, localeCode);
+    if (!resolution) return null;
+    const contentType = await this.prisma.contentType.findFirst({
+      select: { id: true, key: true },
+      where: { key: contentTypeKey, siteId: resolution.siteId },
     });
-    const contentType = site?.contentTypes[0];
-    const locale = site?.locales[0];
-    if (!site || !contentType || !locale) {
-      return null;
-    }
-    return {
+    if (!contentType) return null;
+    return resolution.locales.map((locale) => ({
       contentTypeId: contentType.id,
       contentTypeKey: contentType.key,
       localeCode: locale.code,
       localeId: locale.id,
-      siteId: site.id,
-    };
+      siteId: resolution.siteId,
+    }));
   }
 }

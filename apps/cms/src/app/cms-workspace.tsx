@@ -20,6 +20,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { initialFieldTypes } from "@nexora/schemas";
 import type { CmsSession } from "./auth-api";
 import { ContentTypesView } from "./content-types-view";
+import { ConfigurationLocalizationSettings } from "./configuration-localization-settings";
 import {
   editorialErrorMessage,
   getEditorialContext,
@@ -569,6 +570,14 @@ export function CmsWorkspace({ logoutError, onLogout, session, signingOut }: Cms
                 </>
               ) : null}
             </section>
+            {selectedSiteId ? (
+              <ConfigurationLocalizationSettings
+                csrfToken={session.csrfToken}
+                isSystemAdmin={session.user.isSystemAdmin}
+                key={selectedSiteId}
+                siteId={selectedSiteId}
+              />
+            ) : null}
             <p className="save-notice" aria-live="polite">
               {savedMessage ? (
                 <>

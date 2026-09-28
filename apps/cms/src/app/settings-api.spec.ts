@@ -3,6 +3,8 @@ import {
   CmsApiError,
   listSites,
   readPlatformBranding,
+  readResolvedSiteFeatures,
+  saveSiteFeatures,
   savePlatformBranding,
   saveSiteIdentity,
 } from "./settings-api";
@@ -120,5 +122,48 @@ describe("CMS settings API", () => {
     await expect(
       savePlatformBranding("a".repeat(43), { productName: "Nexora" }, null),
     ).rejects.toBeInstanceOf(CmsApiError);
+  });
+
+  it("parses resolved flags and writes site overrides with optimistic concurrency", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          flags: {
+            "engagement.comments": true,
+            "engagement.newsletter": false,
+            "public.search": false,
+          },
+          global: { "engagement.comments": true },
+          site: { "public.search": false },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ key: "site.features", value: { "public.search": true }, version: 3 }, 200, {
+          ETag: '"3"',
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(readResolvedSiteFeatures("site-1")).resolves.toMatchObject({
+      flags: { "engagement.comments": true, "public.search": false },
+    });
+    await saveSiteFeatures(
+      "csrf",
+      "site-1",
+      { "public.search": true },
+      { key: "site.features", value: { "public.search": false }, version: 2 },
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/core/sites/site-1/settings/site.features", {
+      body: JSON.stringify({ "public.search": true }),
+      cache: "no-store",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"2"',
+        "x-csrf-token": "csrf",
+      },
+      method: "PUT",
+    });
   });
 });
